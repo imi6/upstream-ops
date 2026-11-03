@@ -109,7 +109,7 @@ export function syncChannelStream(channelID: number, options: SyncOptions) {
   return streamSSE(`/api/channels/${channelID}/sync`, options)
 }
 
-/** 触发 /api/channels/sync-all（余额 + 消费，逐渠道串行）。 */
+/** 触发 /api/channels/sync-all（余额 + 消费，多渠道路由后端并发执行）。 */
 export function syncAllChannelsStream(options: SyncOptions) {
   return streamSSE("/api/channels/sync-all", options)
 }

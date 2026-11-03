@@ -936,6 +936,16 @@ func syncChannel(c *gin.Context, d *Deps) {
 	}
 }
 
+// bulkSyncConcurrency 批量同步的并发上限。
+//
+// 每条渠道一轮同步会发多个上游请求（会话/登录、余额、消费、订阅），全部串行时
+// 渠道一多就要等很久。并发跑但给个上限，避免瞬间把上游和本机连接数打满。
+const bulkSyncConcurrency = 4
+
+// syncAllChannels 并发同步所有渠道，进度按渠道维度通过 SSE 推给前端。
+//
+// 每个渠道跑在独立 goroutine 里，各自带独立的 progress observer；sseObserver 内部
+// 有锁，多条渠道同时 emit 不会写乱。整体汇总事件在全部完成后发一条。
 func syncAllChannels(c *gin.Context, d *Deps) {
 	list, err := d.Channels.List()
 	if err != nil {
@@ -946,7 +956,6 @@ func syncAllChannels(c *gin.Context, d *Deps) {
 	obs := setupSSE(c)
 	baseCtx := c.Request.Context()
 	total := len(list)
-	var successCount, failedCount int
 
 	if total == 0 {
 		obs.Emit(progress.Event{
@@ -957,8 +966,18 @@ func syncAllChannels(c *gin.Context, d *Deps) {
 		return
 	}
 
+	var (
+		wg           sync.WaitGroup
+		mu           sync.Mutex
+		successCount int
+		failedCount  int
+	)
+
+	sem := make(chan struct{}, bulkSyncConcurrency)
 	for i := range list {
 		ch := list[i]
+		// index 表示「渠道在列表中的序号」，并发下不再是完成顺序，前端只用它显示
+		// 「第几个渠道」；完成进度由前端按 done/error 事件自行累计。
 		scoped := channelScopedObserver{
 			base:        obs,
 			channelID:   ch.ID,
@@ -968,36 +987,81 @@ func syncAllChannels(c *gin.Context, d *Deps) {
 		}
 		ctx := progress.WithObserver(baseCtx, scoped)
 
-		if err := d.Monitor.RefreshBalance(ctx, &ch); err != nil {
-			failedCount++
-			scoped.Emit(progress.Event{
-				Stage:   progress.StageError,
-				Message: fmt.Sprintf("同步失败：%v", err),
-				Time:    time.Now(),
-			})
-			continue
-		}
-		if err := d.Monitor.CheckSubscriptionUsageAlerts(ctx, &ch); err != nil {
-			failedCount++
-			scoped.Emit(progress.Event{
-				Stage:   progress.StageError,
-				Message: fmt.Sprintf("订阅检查失败：%v", err),
-				Time:    time.Now(),
-			})
-			continue
-		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			// gin.Recovery() 只兜住请求 goroutine，这里自起的 goroutine panic 会直接
+			// 打挂进程，所以单独兜一层。
+			defer func() {
+				if r := recover(); r != nil {
+					scoped.Emit(progress.Event{
+						Stage:   progress.StageError,
+						Message: fmt.Sprintf("同步异常：%v", r),
+						Time:    time.Now(),
+					})
+					mu.Lock()
+					failedCount++
+					mu.Unlock()
+				}
+			}()
+			select {
+			case sem <- struct{}{}:
+				defer func() { <-sem }()
+			case <-baseCtx.Done():
+				scoped.Emit(progress.Event{
+					Stage:   progress.StageError,
+					Message: "同步已取消",
+					Time:    time.Now(),
+				})
+				mu.Lock()
+				failedCount++
+				mu.Unlock()
+				return
+			}
 
-		successCount++
-		scoped.Emit(progress.Event{
-			Stage:   progress.StageDone,
-			Message: "同步完成",
-			Time:    time.Now(),
-		})
+			if err := d.Monitor.RefreshBalance(ctx, &ch); err != nil {
+				scoped.Emit(progress.Event{
+					Stage:   progress.StageError,
+					Message: fmt.Sprintf("同步失败：%v", err),
+					Time:    time.Now(),
+				})
+				mu.Lock()
+				failedCount++
+				mu.Unlock()
+				return
+			}
+			if err := d.Monitor.CheckSubscriptionUsageAlerts(ctx, &ch); err != nil {
+				scoped.Emit(progress.Event{
+					Stage:   progress.StageError,
+					Message: fmt.Sprintf("订阅检查失败：%v", err),
+					Time:    time.Now(),
+				})
+				mu.Lock()
+				failedCount++
+				mu.Unlock()
+				return
+			}
+
+			mu.Lock()
+			successCount++
+			mu.Unlock()
+			scoped.Emit(progress.Event{
+				Stage:   progress.StageDone,
+				Message: "同步完成",
+				Time:    time.Now(),
+			})
+		}()
 	}
 
-	summary := fmt.Sprintf("批量同步完成：成功 %d，失败 %d", successCount, failedCount)
+	wg.Wait()
+
+	mu.Lock()
+	success, failed := successCount, failedCount
+	mu.Unlock()
+
+	summary := fmt.Sprintf("批量同步完成：成功 %d，失败 %d", success, failed)
 	stage := progress.StageDone
-	if failedCount > 0 {
+	if failed > 0 {
 		stage = progress.StageError
 	}
 	obs.Emit(progress.Event{

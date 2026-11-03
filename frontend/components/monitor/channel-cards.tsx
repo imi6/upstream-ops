@@ -713,6 +713,9 @@ export function ChannelCards() {
   // 每个渠道当前 sync 进度（最新一条事件） + 历史事件
   const [syncState, setSyncState] = useState<Record<number, ChannelSyncState>>({})
   const [bulkSync, setBulkSync] = useState<BulkSyncState>({ running: false, completed: 0, total: 0 })
+  // 后端批量同步是并发的，事件到达顺序不等于渠道序号，进度按「已结束的渠道集合」算。
+  const bulkFinishedRef = useRef<Set<number>>(new Set())
+  // 单渠道按钮只在自己这一条或批量同步运行时禁用：不同渠道之间互不阻塞，可以同时点。
   const anySyncRunning = bulkSync.running || Object.values(syncState).some((s) => s.running)
   const channelPage = pageQuery.data
   // 切换筛选 / 翻页后新结果到达前，channelPage 仍是旧条件的数据（useApi 不清空旧数据，避免闪烁）：
@@ -871,6 +874,7 @@ export function ChannelCards() {
     }
 
     setBulkSync({ running: true, completed: 0, total: list.length })
+    bulkFinishedRef.current = new Set()
     try {
       await syncAllChannelsStream({
         onEvent: (ev) => {
@@ -888,12 +892,18 @@ export function ChannelCards() {
             }
           }
 
-          if (ev.index != null && ev.total != null) {
+          // 后端并发跑各渠道，事件顺序不固定，所以按渠道去重累计完成数，
+          // 不能再用 max(index) —— 那是串行时代的「已完成序号」。
+          if (ev.channel_id != null && (ev.stage === "done" || ev.stage === "error")) {
+            bulkFinishedRef.current.add(ev.channel_id)
+            const finished = bulkFinishedRef.current.size
             setBulkSync((prev) => ({
               ...prev,
-              completed: Math.max(prev.completed, ev.index ?? prev.completed),
+              completed: finished,
               total: ev.total ?? prev.total,
             }))
+          } else if (ev.total != null) {
+            setBulkSync((prev) => ({ ...prev, total: ev.total ?? prev.total }))
           }
 
           if (ev.channel_id == null && (ev.stage === "done" || ev.stage === "error")) {
@@ -1289,7 +1299,7 @@ export function ChannelCards() {
                       variant="outline"
                       size="sm"
                       className="gap-1 text-xs"
-                      disabled={!!syncState[c.id]?.running || anySyncRunning}
+                      disabled={!!syncState[c.id]?.running || bulkSync.running}
                       onClick={() => startStream(c, "sync")}
                     >
                       <RefreshCw
@@ -1301,7 +1311,7 @@ export function ChannelCards() {
                       variant="outline"
                       size="sm"
                       className="gap-1 text-xs"
-                      disabled={!!syncState[c.id]?.running || anySyncRunning}
+                      disabled={!!syncState[c.id]?.running || bulkSync.running}
                       onClick={() => startStream(c, "test-login")}
                       >
                         <LogIn className="size-3" />
