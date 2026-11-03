@@ -1,11 +1,11 @@
 name: Publish Docker Image
 
 # 触发：
-#   - 推送到 main 分支             → 发 :latest + :edge 跟踪标签
-#   - 推送形如 v0.0.1 的 git tag    → 发 :v0.0.1 + :0.0 + :latest
-#   - 手动触发                      → 可填自定义 tag
+#   - 推送到 main 分支             → 发 :latest
+#   - 推送形如 v0.0.1 的 git tag    → 发 :latest
+#   - 手动触发                      → 发 :latest
 #
-# 所有构建都附带一个 :sha-xxxxxxx 短 hash tag，方便回滚到任意 commit。
+# 只推送 :latest 一个 tag，不带版本号 / edge / sha 快照。
 on:
   push:
     branches:
@@ -13,11 +13,6 @@ on:
     tags:
       - 'v*.*.*'
   workflow_dispatch:
-    inputs:
-      tag:
-        description: '额外推送的镜像 tag（可选，如 dev-test）'
-        required: false
-        default: ''
 
 permissions:
   contents: read
@@ -45,21 +40,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # 根据触发场景自动算 tag：semver tag → v0.0.1 / 0.0 / latest；main → edge；
-      # 任何场景都额外加一个 sha-xxxxxxx 作为不可变快照。
+      # 任何触发场景都只推 :latest 一个 tag。
       - name: Extract Docker metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
             type=raw,value=latest
-            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
-            type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
-            type=sha,prefix=sha-,format=short
           flavor: |
             latest=false
 
