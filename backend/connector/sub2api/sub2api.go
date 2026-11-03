@@ -210,22 +210,71 @@ func (c *Client) GetBalance(ctx context.Context, ch *connector.Channel, session 
 }
 
 func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) (*connector.CostResult, error) {
-	body, err := c.getJSON(ctx, strings.TrimRight(ch.SiteURL, "/")+"/api/v1/usage/dashboard/stats", session)
+	site := strings.TrimRight(ch.SiteURL, "/")
+	today, total, err := c.dashboardCosts(ctx, site, session)
 	if err != nil {
-		return nil, fmt.Errorf("sub2api dashboard stats: %w", err)
+		// 部分站点改造后下线了 dashboard/stats，改用 /usage/stats 传日期区间兜底。
+		var fallbackErr error
+		today, total, fallbackErr = c.usageStatsCosts(ctx, site, session)
+		if fallbackErr != nil {
+			return nil, fmt.Errorf("sub2api dashboard stats: %w; fallback usage stats: %v", err, fallbackErr)
+		}
+	}
+	multiplier := c.rechargeMultiplier(ctx, ch, session)
+	return &connector.CostResult{
+		TodayCost: connector.ApplyRechargeMultiplier(today, multiplier, ch.RechargeMultiplierMode),
+		TotalCost: connector.ApplyRechargeMultiplier(total, multiplier, ch.RechargeMultiplierMode),
+	}, nil
+}
+
+func (c *Client) dashboardCosts(ctx context.Context, site string, session *connector.AuthSession) (float64, float64, error) {
+	body, err := c.getJSON(ctx, site+"/api/v1/usage/dashboard/stats", session)
+	if err != nil {
+		return 0, 0, err
 	}
 	var stats struct {
 		TodayActualCost float64 `json:"today_actual_cost"`
 		TotalActualCost float64 `json:"total_actual_cost"`
 	}
 	if err := json.Unmarshal(body, &stats); err != nil {
-		return nil, fmt.Errorf("sub2api dashboard stats decode: %w", err)
+		return 0, 0, fmt.Errorf("decode: %w", err)
 	}
-	multiplier := c.rechargeMultiplier(ctx, ch, session)
-	return &connector.CostResult{
-		TodayCost: connector.ApplyRechargeMultiplier(stats.TodayActualCost, multiplier, ch.RechargeMultiplierMode),
-		TotalCost: connector.ApplyRechargeMultiplier(stats.TotalActualCost, multiplier, ch.RechargeMultiplierMode),
-	}, nil
+	return stats.TodayActualCost, stats.TotalActualCost, nil
+}
+
+func (c *Client) usageStatsCosts(ctx context.Context, site string, session *connector.AuthSession) (float64, float64, error) {
+	now := time.Now()
+	today := now.Format("2006-01-02")
+	// 查询区间为闭区间（start_date == end_date 表示当天），累计用足够早的起始日期覆盖全部数据。
+	todayCost, err := c.usageStatsActualCost(ctx, site, session, url.Values{
+		"start_date": {today},
+		"end_date":   {today},
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("today: %w", err)
+	}
+	totalCost, err := c.usageStatsActualCost(ctx, site, session, url.Values{
+		"start_date": {"2000-01-01"},
+		"end_date":   {today},
+	})
+	if err != nil {
+		return 0, 0, fmt.Errorf("total: %w", err)
+	}
+	return todayCost, totalCost, nil
+}
+
+func (c *Client) usageStatsActualCost(ctx context.Context, site string, session *connector.AuthSession, params url.Values) (float64, error) {
+	body, err := c.getJSON(ctx, site+"/api/v1/usage/stats?"+params.Encode(), session)
+	if err != nil {
+		return 0, err
+	}
+	var stats struct {
+		TotalActualCost float64 `json:"total_actual_cost"`
+	}
+	if err := json.Unmarshal(body, &stats); err != nil {
+		return 0, fmt.Errorf("decode: %w", err)
+	}
+	return stats.TotalActualCost, nil
 }
 
 func (c *Client) rechargeMultiplier(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) *float64 {

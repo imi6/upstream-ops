@@ -14,6 +14,7 @@
 /upstream-ops.deploy.env
 /docker-compose.deploy.yml
 
+har
 # Test / coverage
 *.test
 *.out

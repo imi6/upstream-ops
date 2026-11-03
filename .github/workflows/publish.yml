@@ -1,7 +1,7 @@
 name: Publish Docker Image
 
 # 触发：
-#   - 推送到 main 分支             → 发 :edge 跟踪标签
+#   - 推送到 main 分支             → 发 :latest + :edge 跟踪标签
 #   - 推送形如 v0.0.1 的 git tag    → 发 :v0.0.1 + :0.0 + :latest
 #   - 手动触发                      → 可填自定义 tag
 #
@@ -34,10 +34,6 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # QEMU 让 amd64 runner 能跑 arm64 emulation 出 ARM 镜像。
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
-
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -60,21 +56,21 @@ jobs:
             type=ref,event=tag
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
+            type=raw,value=latest
             type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
             type=raw,value=${{ inputs.tag }},enable=${{ inputs.tag != '' }}
             type=sha,prefix=sha-,format=short
           flavor: |
             latest=false
 
-      # 多架构构建 + 推送。GitHub Actions 内置 cache (type=gha) 把
+      # 单架构构建 + 推送，仅 linux/amd64。GitHub Actions 内置 cache (type=gha) 把
       # 前端 pnpm install 和后端 go mod download 都缓存住，二次构建 1-2 分钟。
       - name: Build and push
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
+          platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
