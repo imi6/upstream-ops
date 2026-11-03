@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/bejix/upstream-ops/backend/storage"
 	"github.com/spf13/viper"
