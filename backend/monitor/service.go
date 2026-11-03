@@ -46,6 +46,20 @@ func NewService(
 	}
 }
 
+// ChannelScanTimeout 单个渠道一轮扫描的超时上限（会话 + 余额 + 消费 + 订阅）。
+//
+// 每个渠道独立计时：个别上游响应慢（例如 refresh token 卡在 30s 单请求超时）时，
+// 只影响它自己，不会把整轮扫描的预算吃光、让后面的渠道拿到已过期的 context。
+const ChannelScanTimeout = 90 * time.Second
+
+// scanBudget 按渠道数推算整轮扫描的总预算，保证每个渠道都能分到一份 ChannelScanTimeout。
+func scanBudget(channelCount int) time.Duration {
+	if channelCount < 1 {
+		channelCount = 1
+	}
+	return time.Duration(channelCount)*ChannelScanTimeout + 2*time.Minute
+}
+
 // ScanAllBalances 扫描所有启用监控的渠道余额。单个失败不影响其他。
 func (s *Service) ScanAllBalances(ctx context.Context) {
 	list, err := s.channels.ListMonitorEnabled()
@@ -53,15 +67,28 @@ func (s *Service) ScanAllBalances(ctx context.Context) {
 		s.log.Error("list channels", "err", err)
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, scanBudget(len(list)))
+	defer cancel()
+
 	for i := range list {
-		c := list[i]
-		if err := s.RefreshBalance(ctx, &c); err != nil {
-			s.log.Warn("refresh balance failed", "channel", c.Name, "err", err)
-			continue
+		if err := ctx.Err(); err != nil {
+			s.log.Warn("balance scan aborted", "remaining", len(list)-i, "err", err)
+			return
 		}
-		if err := s.CheckSubscriptionUsageAlerts(ctx, &c); err != nil {
-			s.log.Warn("check subscription usage failed", "channel", c.Name, "err", err)
-		}
+		s.scanChannelBalance(ctx, &list[i])
+	}
+}
+
+func (s *Service) scanChannelBalance(ctx context.Context, c *storage.Channel) {
+	chCtx, cancel := context.WithTimeout(ctx, ChannelScanTimeout)
+	defer cancel()
+
+	if err := s.RefreshBalance(chCtx, c); err != nil {
+		s.log.Warn("refresh balance failed", "channel", c.Name, "err", err)
+		return
+	}
+	if err := s.CheckSubscriptionUsageAlerts(chCtx, c); err != nil {
+		s.log.Warn("check subscription usage failed", "channel", c.Name, "err", err)
 	}
 }
 
@@ -72,12 +99,20 @@ func (s *Service) ScanAllRates(ctx context.Context) {
 		s.log.Error("list channels", "err", err)
 		return
 	}
+	ctx, cancel := context.WithTimeout(ctx, scanBudget(len(list)))
+	defer cancel()
+
 	batch := notify.RateNotificationBatch{}
 	for i := range list {
-		c := list[i]
-		if err := s.refreshRates(ctx, &c, &batch); err != nil {
-			s.log.Warn("refresh rates failed", "channel", c.Name, "err", err)
+		if err := ctx.Err(); err != nil {
+			s.log.Warn("rate scan aborted", "remaining", len(list)-i, "err", err)
+			break
 		}
+		chCtx, cancelChannel := context.WithTimeout(ctx, ChannelScanTimeout)
+		if err := s.refreshRates(chCtx, &list[i], &batch); err != nil {
+			s.log.Warn("refresh rates failed", "channel", list[i].Name, "err", err)
+		}
+		cancelChannel()
 	}
 	if !batch.Empty() {
 		_ = s.dispatcher.DispatchRateNotificationBatch(ctx, batch)

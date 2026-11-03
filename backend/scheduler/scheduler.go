@@ -14,6 +14,14 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
+// 单渠道扫描超时在 monitor 层控制；这里只给「扫描之后的收尾动作」留预算。
+const (
+	// captchaRefreshBudget 打码平台余额刷新的总预算。
+	captchaRefreshBudget = 2 * time.Minute
+	// rateResortBudget 倍率扫描后的网关路由重排预算。
+	rateResortBudget = 2 * time.Minute
+)
+
 // Scheduler 周期性任务调度器。
 type Scheduler struct {
 	cfg           config.SchedulerConfig
@@ -52,7 +60,15 @@ func New(
 	return &Scheduler{
 		cfg:           cfg,
 		log:           log,
-		cron:          cron.New(cron.WithSeconds()),
+		// Recover 避免单个任务 panic 拖垮调度器；SkipIfStillRunning 在上一轮还没跑完时
+		// 跳过本轮，防止扫描任务叠加。
+		cron: cron.New(
+			cron.WithSeconds(),
+			cron.WithChain(
+				cron.Recover(cronLogger{log: log}),
+				cron.SkipIfStillRunning(cronLogger{log: log}),
+			),
+		),
 		monitor:       m,
 		monLogs:       monLogs,
 		rates:         rates,
@@ -99,26 +115,48 @@ func (s *Scheduler) Stop() {
 	}
 }
 
+// 每轮扫描的总预算由 monitor 按渠道数推算，这里不再设固定上限
+// —— 固定预算会在渠道多时被前面的渠道吃光，导致后面的渠道拿到已过期的 context 而整批失败。
 func (s *Scheduler) runBalance() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	ctx := context.Background()
 	s.monitor.ScanAllBalances(ctx)
 	if s.captchas != nil && s.cipher != nil {
-		if _, err := captcha.RefreshAllBalancesWithProxy(ctx, s.captchas, s.cipher, s.log, s.proxy); err != nil {
+		captchaCtx, cancel := context.WithTimeout(ctx, captchaRefreshBudget)
+		defer cancel()
+		if _, err := captcha.RefreshAllBalancesWithProxy(captchaCtx, s.captchas, s.cipher, s.log, s.proxy); err != nil {
 			s.log.Warn("refresh captcha balances failed", "err", err)
 		}
 	}
 }
 
 func (s *Scheduler) runRates() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
+	ctx := context.Background()
 	if s.monitor != nil {
 		s.monitor.ScanAllRates(ctx)
 	}
 	if s.gatewayResort != nil {
-		s.gatewayResort.ResortRoutesOnRateScan(ctx)
+		resortCtx, cancel := context.WithTimeout(ctx, rateResortBudget)
+		defer cancel()
+		s.gatewayResort.ResortRoutesOnRateScan(resortCtx)
 	}
+}
+
+// cronLogger 把 robfig/cron 的内部日志（任务跳过、panic 恢复）转发到 slog。
+// log 为 nil 时静默丢弃，避免调度器构造方未传 logger 时 panic。
+type cronLogger struct{ log *slog.Logger }
+
+func (l cronLogger) Info(msg string, keysAndValues ...any) {
+	if l.log == nil {
+		return
+	}
+	l.log.Info(msg, keysAndValues...)
+}
+
+func (l cronLogger) Error(err error, msg string, keysAndValues ...any) {
+	if l.log == nil {
+		return
+	}
+	l.log.Error(msg, append([]any{"err", err}, keysAndValues...)...)
 }
 
 func (s *Scheduler) hasRetention() bool {
