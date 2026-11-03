@@ -3,7 +3,6 @@ import { useNavigate } from "react-router-dom"
 import { useTheme } from "next-themes"
 import {
   Activity,
-  Github,
   Home,
   LogOut,
   Menu,
@@ -211,16 +210,6 @@ export function MonitorHeader() {
                 系统设置
               </DropdownMenuItem>
               <DropdownMenuSeparator />
-              <DropdownMenuItem asChild>
-                <a
-                  href="https://github.com/bejix/upstream-ops"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <Github className="size-4" />
-                  GitHub 仓库
-                </a>
-              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => setTheme(isDark ? "light" : "dark")}>
                 {isDark ? <Moon className="size-4" /> : <Sun className="size-4" />}
                 {isDark ? "切换浅色主题" : "切换深色主题"}
@@ -270,29 +259,6 @@ export function MonitorHeader() {
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
                 {"系统设置"}
-              </TooltipContent>
-            </Tooltip>
-
-            <Tooltip delayDuration={200}>
-              <TooltipTrigger asChild>
-                <Button
-                  asChild
-                  variant="outline"
-                  size="icon"
-                  className="size-8 border-border bg-background text-foreground hover:bg-muted"
-                  aria-label="GitHub 仓库"
-                >
-                  <a
-                    href="https://github.com/bejix/upstream-ops"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <Github className="size-3.5" />
-                  </a>
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">
-                {"GitHub · bejix/upstream-ops"}
               </TooltipContent>
             </Tooltip>
 

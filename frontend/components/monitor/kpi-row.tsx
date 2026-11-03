@@ -1,6 +1,6 @@
 "use client"
 
-import { ArrowUpRight, DollarSign, MessageSquare, Wallet } from "lucide-react"
+import { ArrowUpRight, CalendarClock, DollarSign, MessageSquare, Wallet } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import {
@@ -26,6 +26,20 @@ function countTodayChanges(changes: { changed_at: string }[]) {
   return changes.filter((c) => new Date(c.changed_at) >= startOfDay).length
 }
 
+// 可用天数 = 总余额 / 今日总消费。今日消费为 0 时无法估算消耗速率，返回 null。
+function estimateRunwayDays(balance: number, todayCost: number): number | null {
+  if (todayCost <= 0 || balance <= 0) return null
+  return balance / todayCost
+}
+
+function formatRunway(days: number | null): string {
+  if (days == null) return "—"
+  if (days >= 365) return "> 365 天"
+  // 10 天以上取整，避免「62.3 天」这种不必要的精度。
+  if (days >= 10) return `${Math.round(days)} 天`
+  return `${days.toFixed(1)} 天`
+}
+
 export function KpiRow() {
   const summary = useDashboardSummary()
   const recentChanges = useRateChanges(1, 100)
@@ -40,6 +54,8 @@ export function KpiRow() {
   const lowest = data?.lowest_balance ?? null
 
   const todayChangeCount = countTodayChanges(recentChanges.data?.items ?? [])
+
+  const runwayDays = estimateRunwayDays(totalBalance, todayTotalCost)
 
   const kpis: Kpi[] = [
     {
@@ -104,6 +120,34 @@ export function KpiRow() {
               <span className="text-danger font-medium">{failed} 失败</span>
             </>
           ) : null}
+        </span>
+      ),
+    },
+    {
+      label: "可用天数",
+      value: (
+        <span
+          className={cn(
+            runwayDays != null && runwayDays < 3
+              ? "text-danger"
+              : runwayDays != null && runwayDays < 7
+                ? "text-warning"
+                : "text-foreground",
+          )}
+        >
+          {formatRunway(runwayDays)}
+        </span>
+      ),
+      icon: CalendarClock,
+      iconBg: "bg-brand/10",
+      iconColor: "text-brand",
+      footer: (
+        <span className="text-muted-foreground">
+          {runwayDays == null
+            ? todayTotalCost <= 0
+              ? "今日无消费，无法估算"
+              : "余额不足，无法估算"
+            : "按今日消费速率估算"}
         </span>
       ),
     },
