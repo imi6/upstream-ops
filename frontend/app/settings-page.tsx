@@ -13,7 +13,6 @@ import {
   Server,
   ShieldCheck,
   Trash2,
-  Workflow,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -41,7 +40,6 @@ import type {
   NotificationChannel,
   NotificationChannelType,
   SystemConfig,
-  SystemGatewayConfig,
 } from "@/lib/api-types";
 import { decimal, money, relativeTime } from "@/lib/format";
 import {
@@ -55,36 +53,6 @@ import { cn } from "@/lib/utils";
 
 function num(v: string) {
   return Number(v || 0);
-}
-
-const defaultGatewayConfig: SystemGatewayConfig = {
-  tempPauseSeconds: 30,
-  forwardTimeoutSeconds: 600,
-  modelsCacheTTLSeconds: 60,
-  maxFailoverSwitches: 8,
-  routeBatchConcurrency: 8,
-  usageErrorBodyBytes: 32768,
-  usageErrorMsgRunes: 500,
-  usageErrorHeaderValueRunes: 8192,
-  usageErrorHeadersJSONBytes: 65536,
-  streamKeepaliveSeconds: 15,
-  streamIdleTimeoutSeconds: 120,
-  streamMaxLineBytes: 8 * 1024 * 1024,
-};
-
-function patchGateway(
-  prev: SystemConfig | null,
-  key: keyof SystemGatewayConfig,
-  value: number,
-): SystemConfig | null {
-  if (!prev) return prev;
-  return {
-    ...prev,
-    gateway: {
-      ...(prev.gateway ?? defaultGatewayConfig),
-      [key]: value,
-    },
-  };
 }
 
 interface ProxyTestResult {
@@ -125,11 +93,7 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (query.data?.config) {
-      const cfg = query.data.config;
-      setForm({
-        ...cfg,
-        gateway: { ...defaultGatewayConfig, ...(cfg.gateway ?? {}) },
-      });
+      setForm(query.data.config);
     }
   }, [query.data]);
 
@@ -959,202 +923,6 @@ export default function SettingsPage() {
             </div>
           </SectionCard>
 
-          <SectionCard
-            icon={<Workflow className="size-4 text-violet-600" />}
-            title="网关运行时"
-            description="AI 网关转发、批量运维与用量错误落库截断。保存后点「应用配置」立即生效。"
-          >
-            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              <Field
-                label="转发超时（秒）"
-                description={`单次上游转发/流式 drain 超时，默认 ${defaultGatewayConfig.forwardTimeoutSeconds}。`}
-              >
-                <Input
-                  type="number"
-                  min={1}
-                  value={String(form.gateway?.forwardTimeoutSeconds ?? defaultGatewayConfig.forwardTimeoutSeconds)}
-                  onChange={(e) =>
-                    setForm((prev) =>
-                      patchGateway(prev, "forwardTimeoutSeconds", num(e.target.value)),
-                    )
-                  }
-                />
-              </Field>
-              <Field
-                label="流保活间隔（秒）"
-                description={`已提交 SSE 流的下游保活间隔，默认 ${defaultGatewayConfig.streamKeepaliveSeconds}。`}
-              >
-                <Input
-                  type="number"
-                  min={1}
-                  value={String(form.gateway?.streamKeepaliveSeconds ?? defaultGatewayConfig.streamKeepaliveSeconds)}
-                  onChange={(e) =>
-                    setForm((prev) =>
-                      patchGateway(prev, "streamKeepaliveSeconds", num(e.target.value)),
-                    )
-                  }
-                />
-              </Field>
-              <Field
-                label="流空闲超时（秒）"
-                description={`上游 SSE 在收到数据后允许的最长空闲时间，默认 ${defaultGatewayConfig.streamIdleTimeoutSeconds}。`}
-              >
-                <Input
-                  type="number"
-                  min={1}
-                  value={String(form.gateway?.streamIdleTimeoutSeconds ?? defaultGatewayConfig.streamIdleTimeoutSeconds)}
-                  onChange={(e) =>
-                    setForm((prev) =>
-                      patchGateway(prev, "streamIdleTimeoutSeconds", num(e.target.value)),
-                    )
-                  }
-                />
-              </Field>
-              <Field
-                label="SSE 单行上限（字节）"
-                description={`上游单条 SSE 行最大长度，默认 ${defaultGatewayConfig.streamMaxLineBytes}。`}
-              >
-                <Input
-                  type="number"
-                  min={65536}
-                  value={String(form.gateway?.streamMaxLineBytes ?? defaultGatewayConfig.streamMaxLineBytes)}
-                  onChange={(e) =>
-                    setForm((prev) =>
-                      patchGateway(prev, "streamMaxLineBytes", num(e.target.value)),
-                    )
-                  }
-                />
-              </Field>
-              <Field
-                label="新建组默认冷却（秒）"
-                description={`创建网关组时默认临时暂停时长，默认 ${defaultGatewayConfig.tempPauseSeconds}。`}
-              >
-                <Input
-                  type="number"
-                  min={0}
-                  value={String(form.gateway?.tempPauseSeconds ?? defaultGatewayConfig.tempPauseSeconds)}
-                  onChange={(e) =>
-                    setForm((prev) =>
-                      patchGateway(prev, "tempPauseSeconds", num(e.target.value)),
-                    )
-                  }
-                />
-              </Field>
-              <Field
-                label="新建组默认顺延次数"
-                description={`创建组时默认最大 failover 切换次数，默认 ${defaultGatewayConfig.maxFailoverSwitches}。`}
-              >
-                <Input
-                  type="number"
-                  min={0}
-                  max={32}
-                  value={String(form.gateway?.maxFailoverSwitches ?? defaultGatewayConfig.maxFailoverSwitches)}
-                  onChange={(e) =>
-                    setForm((prev) =>
-                      patchGateway(prev, "maxFailoverSwitches", num(e.target.value)),
-                    )
-                  }
-                />
-              </Field>
-              <Field
-                label="模型列表缓存 TTL（秒）"
-                description={`公开 /v1/models 缓存时间，默认 ${defaultGatewayConfig.modelsCacheTTLSeconds}。`}
-              >
-                <Input
-                  type="number"
-                  min={0}
-                  value={String(form.gateway?.modelsCacheTTLSeconds ?? defaultGatewayConfig.modelsCacheTTLSeconds)}
-                  onChange={(e) =>
-                    setForm((prev) =>
-                      patchGateway(prev, "modelsCacheTTLSeconds", num(e.target.value)),
-                    )
-                  }
-                />
-              </Field>
-              <Field
-                label="批量运维并发"
-                description={`测试模型 / 确保密钥 / 同步模型 / 拉源分组并发上限，默认 ${defaultGatewayConfig.routeBatchConcurrency}，最大 64。`}
-              >
-                <Input
-                  type="number"
-                  min={1}
-                  max={64}
-                  value={String(form.gateway?.routeBatchConcurrency ?? defaultGatewayConfig.routeBatchConcurrency)}
-                  onChange={(e) =>
-                    setForm((prev) =>
-                      patchGateway(prev, "routeBatchConcurrency", num(e.target.value)),
-                    )
-                  }
-                />
-              </Field>
-              <Field
-                label="错误体落库上限（字节）"
-                description={`用量错误响应体截断，默认 ${defaultGatewayConfig.usageErrorBodyBytes}。`}
-              >
-                <Input
-                  type="number"
-                  min={1024}
-                  value={String(form.gateway?.usageErrorBodyBytes ?? defaultGatewayConfig.usageErrorBodyBytes)}
-                  onChange={(e) =>
-                    setForm((prev) =>
-                      patchGateway(prev, "usageErrorBodyBytes", num(e.target.value)),
-                    )
-                  }
-                />
-              </Field>
-              <Field
-                label="错误摘要上限（字符）"
-                description={`用量 error_message 截断，默认 ${defaultGatewayConfig.usageErrorMsgRunes}。`}
-              >
-                <Input
-                  type="number"
-                  min={64}
-                  value={String(form.gateway?.usageErrorMsgRunes ?? defaultGatewayConfig.usageErrorMsgRunes)}
-                  onChange={(e) =>
-                    setForm((prev) =>
-                      patchGateway(prev, "usageErrorMsgRunes", num(e.target.value)),
-                    )
-                  }
-                />
-              </Field>
-              <Field
-                label="单头值上限（字符）"
-                description={`上游响应头单值截断，默认 ${defaultGatewayConfig.usageErrorHeaderValueRunes}。`}
-              >
-                <Input
-                  type="number"
-                  min={256}
-                  value={String(
-                    form.gateway?.usageErrorHeaderValueRunes ??
-                      defaultGatewayConfig.usageErrorHeaderValueRunes,
-                  )}
-                  onChange={(e) =>
-                    setForm((prev) =>
-                      patchGateway(prev, "usageErrorHeaderValueRunes", num(e.target.value)),
-                    )
-                  }
-                />
-              </Field>
-              <Field
-                label="响应头 JSON 上限（字节）"
-                description={`上游响应头整段 JSON 截断，默认 ${defaultGatewayConfig.usageErrorHeadersJSONBytes}。`}
-              >
-                <Input
-                  type="number"
-                  min={1024}
-                  value={String(
-                    form.gateway?.usageErrorHeadersJSONBytes ??
-                      defaultGatewayConfig.usageErrorHeadersJSONBytes,
-                  )}
-                  onChange={(e) =>
-                    setForm((prev) =>
-                      patchGateway(prev, "usageErrorHeadersJSONBytes", num(e.target.value)),
-                    )
-                  }
-                />
-              </Field>
-            </div>
-          </SectionCard>
 
           <SectionCard
             icon={<Network className="size-4 text-cyan-600" />}

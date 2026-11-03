@@ -136,12 +136,6 @@ func AutoMigrate(db *gorm.DB) error {
 		&NotificationLog{},
 		&NotificationCooldown{},
 		&MonitorLog{},
-		&GatewayGroup{},
-		&GatewayKey{},
-		&GatewayRoute{},
-		&GatewayProvider{},
-		&GatewayUsageLog{},
-		&ModelPriceOverride{},
 	); err != nil {
 		return err
 	}

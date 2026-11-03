@@ -17,7 +17,6 @@ import (
 	"github.com/bejix/upstream-ops/backend/channel"
 	"github.com/bejix/upstream-ops/backend/config"
 	"github.com/bejix/upstream-ops/backend/crypto"
-	"github.com/bejix/upstream-ops/backend/gateway"
 	"github.com/bejix/upstream-ops/backend/logger"
 	"github.com/bejix/upstream-ops/backend/monitor"
 	"github.com/bejix/upstream-ops/backend/notify"
@@ -100,23 +99,10 @@ func main() {
 	announcements := storage.NewUpstreamAnnouncements(db)
 	rates := storage.NewRates(db)
 	monLogs := storage.NewMonitorLogs(db)
-	gatewayGroups := storage.NewGatewayGroups(db)
-	gatewayKeys := storage.NewGatewayKeys(db)
-	gatewayRoutes := storage.NewGatewayRoutes(db)
-	gatewayProviders := storage.NewGatewayProviders(db)
-	gatewayUsage := storage.NewGatewayUsageLogs(db)
-	modelPrices := storage.NewModelPriceOverrides(db)
 
 	channelSvc := channel.NewService(channels, authSessions, captchas, rates, monLogs, cipher)
 	channelSvc.UpdateProxyConfig(cfg.Proxy)
 	channelSvc.UpdateUpstreamConfig(cfg.Upstream)
-	gatewaySvc := gateway.NewService(gatewayGroups, gatewayKeys, gatewayRoutes, gatewayUsage, modelPrices, channels, channelSvc, cipher, log)
-	gatewaySvc.SetProviders(gatewayProviders)
-	gatewaySvc.UpdateProxyConfig(cfg.Proxy)
-	gatewaySvc.UpdateUpstreamConfig(cfg.Upstream)
-	gatewaySvc.UpdateGatewayConfig(cfg.Gateway)
-	gatewaySvc.StartPricing(cfg.Pricing)
-	defer gatewaySvc.Stop()
 	dispatcher := notify.NewDispatcher(notifies, cipher, log, notify.Policy{
 		NotificationPrefix:                       cfg.App.NotificationPrefix,
 		MinChangePct:                             cfg.Notifications.MinChangePct,
@@ -132,7 +118,7 @@ func main() {
 	monitorSvc := monitor.NewService(channels, announcements, rates, monLogs, channelSvc, dispatcher, log)
 
 	schedulerFactory := func(scfg config.SchedulerConfig, pcfg config.ProxyConfig) *scheduler.Scheduler {
-		return scheduler.New(scfg, monitorSvc, monLogs, rates, notifies, announcements, captchas, cipher, gatewaySvc, pcfg, log)
+		return scheduler.New(scfg, monitorSvc, monLogs, rates, notifies, announcements, captchas, cipher, pcfg, log)
 	}
 	sch := schedulerFactory(cfg.Scheduler, cfg.Proxy)
 	if err := sch.Start(); err != nil {
@@ -147,12 +133,10 @@ func main() {
 		log,
 		dispatcher,
 		channelSvc,
-		gatewaySvc,
 		authSvc,
 		sch,
 		cfg.Proxy,
 		cfg.Upstream,
-		cfg.Gateway,
 		schedulerFactory,
 	)
 
@@ -187,11 +171,6 @@ func main() {
 		ChannelSvc:    channelSvc,
 		Monitor:       monitorSvc,
 		Dispatcher:    dispatcher,
-		Gateway:       gatewaySvc,
-		GatewayGroups: gatewayGroups,
-		GatewayKeys:   gatewayKeys,
-		GatewayUsage:  gatewayUsage,
-		ModelPrices:   modelPrices,
 		Log:           log,
 		Frontend:      frontendFS,
 	})

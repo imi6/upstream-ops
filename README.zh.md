@@ -5,7 +5,6 @@
 > 本项目基于 [worryzyy/upstream-hub](https://github.com/worryzyy/upstream-hub) 二次开发，感谢原作者 [@worryzyy](https://github.com/worryzyy) 的开源工作。
 
 > UpstreamOps 是一个面向 NewAPI / Sub2API 上游站点的集中监控与运维面板，用来统一管理上游账号、查看余额与消费、同步模型倍率、追踪倍率变化、维护上游 API Key、发起充值/兑换，并通过多种通知渠道推送余额告警、倍率变更、登录异常、监控异常和上游公告。
-同时内置 OpenAI / Claude / Responses 兼容的请求转发网关：可创建网关密钥、绑定同步渠道或直连上游、按倍率与权重调度、协议互转、故障自动切换，并记录每次请求的用量与费用参考。
 
 
 ## ❤️赞助商
@@ -57,40 +56,6 @@ UpstreamOps 主要解决这些痛点：
 
 ## 功能概览
 
-### 请求转发网关
-
-- 提供兼容客户端入口（Bearer / `x-api-key`）：
-  - `GET /v1`（无嵌入前端时也可为 `GET /`）返回 endpoints 说明
-  - `GET /v1/models`、`GET /v1/usage`
-  - `POST /v1/chat/completions`、`POST /v1/completions`
-  - `POST /v1/responses`（OpenAI Responses，含 stream / 子路径）
-  - `POST /v1/messages`、`POST /v1/messages/count_tokens`（Anthropic）
-  - 透传类：`/v1/embeddings`、`/v1/images/*`、`/v1/videos/*` 等（改 model 后按上游 path 转发）
-  - 兼容路径：`/chat/completions`、`/responses`、Codex `/backend-api/codex/*`、Gemini `/v1beta/*` 等
-- **网关组**为配置单元：组内多把密钥共享路由、映射、模型列表与重试/顺延策略。
-- **路由来源**两种：
-  - **同步渠道**：绑定已监控的 NewAPI / Sub2API 渠道 + 源分组；可「确保上游密钥」自动创建/复用专用 API Key。
-  - **直连渠道（Provider）**：在网关内维护 base URL、API Key、默认计费倍率、鉴权样式与代理开关，无需先做监控渠道。
-- 路由调度：源分组倍率换算（raw / ×100 / ÷100 / custom）+ 权重；组级升序/降序；可开启「倍率扫描后自动重排」。
-- 可视化模型映射（A→B、`*` 通配）与模型列表（从上游拉取去重 / 自定义 / auto·manual·hybrid）；支持按路由预览、同步与探测。
-- **协议互转**（含非流式与 SSE 增量）：
-  - OpenAI Chat ↔ Anthropic Messages
-  - OpenAI Chat ↔ OpenAI Responses
-  - Anthropic ↔ OpenAI Responses
-  - 路由 `upstream_protocol`：`auto` / `openai`（Chat）/ `openai_responses` / `anthropic`
-- 故障转移：网络错误、429、5xx 临时暂停并顺延；组可开「4xx 顺延」；支持组级重试次数、最大切换次数、冷却秒数。
-- **首字超时**（可选）：在仍有可顺延路由时，对首字节等待限时，加速切换到下一条路由。
-- **系统提示词注入**（组级）：按规则顺序注入，可作用于全部 Key 或指定 Key；覆盖 Chat `system`、Responses `instructions`、Anthropic `system`（HTTP 与 Responses WebSocket）。
-- **`service_tier` 策略**（组级）：匹配 `all` / `default` / `priority` / `flex`（并规范化 `fast` → `priority`）；动作支持透传、过滤、强制 `default` / `priority`、或拦截。
-- **Responses WebSocket**：`/v1/responses` 支持 Upgrade；会话中不可切换协议，仅 Responses 能力路由可接入。
-- **Responses 工具桥接**：Responses→Chat/Anthropic 降级时保留 custom tools、namespaced tools 与 `tool_search` 往返语义。
-- **图片 / 视频计费输入**：从 image/video 接口与 Responses 图片生成工具用量解析请求数、分辨率档位与时长，用于费用估算。
-- User-Agent：路由级 `passthrough` / `group` / `custom`；管理侧拉模型、探测会回落默认 UA。
-- 使用记录对齐 sub2api 字段：endpoint、协议、tokens（含缓存读写分桶）、费用、延迟、首字延迟、成功/失败与上游错误详情；提供列表、stats、模型筛选项与清理。
-- 计费：内置单价表（可覆盖）+ `actual_cost = base_cost × 账号计费倍率`（共用倍率换算规则）。
-- 运行时参数（系统设置 `gateway` 段可热更新）：转发超时、模型列表缓存 TTL、默认暂停秒数、批量运维并发、用量错误落库截断等。
-- 管理入口：Dock「请求网关」页面（`/gateway`）；管理 API 前缀 `/api/gateway/*`（需后台鉴权）。
-
 ### 上游渠道管理
 
 - 支持 NewAPI / Sub2API 两类上游。
@@ -106,7 +71,7 @@ UpstreamOps 主要解决这些痛点：
 - 支持按名称、账号、站点地址、备注或标签搜索渠道，按状态（健康 / 低余额 / 登录失败 / 尚未采集 / 已暂停）或标签筛选，并按名称、账号（中文按拼音）、健康状态或余额排序。
 - 支持为渠道添加自定义标签和备注，标签可直接用于筛选。
 - 渠道卡片显示登录账号；渠道列表每页显示数量会保存在浏览器中，刷新后保持不变。
-- 支持「仅显示已创建密钥的分组」开关：开启后渠道卡片、分组对话框、倍率面板和倍率变动通知只关注已创建密钥的分组；网关转发和通知设置仍可看到全部分组，本地倍率快照也始终保留全量。
+- 支持「仅显示已创建密钥的分组」开关：开启后渠道卡片、分组对话框、倍率面板和倍率变动通知只关注已创建密钥的分组；通知设置仍可看到全部分组，本地倍率快照也始终保留全量。
 - 删除上游渠道时会自动清理相关快照、倍率、公告、通知冷却和通知日志。
 
 ### 余额与消费监控
@@ -254,12 +219,11 @@ UpstreamOps 主要解决这些痛点：
 - 代理连通性测试。
 - 版本检查结果通过页面通知提示。
 - 上游请求超时时间和 `User-Agent`。
-- 请求网关运行时参数（`gateway` 段：转发超时、模型缓存、故障暂停、批量并发、用量错误截断等）。
 - Sub2API 目标上游和同步分组。
 - 通知渠道。
 - 验证码服务。
 
-保存配置会写入配置文件；应用配置后，鉴权、调度、通知策略、代理、上游 HTTP 与网关运行时配置会立即生效。通知渠道和验证码服务本身是实时写库生效。
+保存配置会写入配置文件；应用配置后，鉴权、调度、通知策略、代理与上游 HTTP 配置会立即生效。通知渠道和验证码服务本身是实时写库生效。
 
 ## 快速启动
 
@@ -455,16 +419,6 @@ upstream:
   timeoutSeconds: 30
   userAgent: upstream-ops/0.1
 
-gateway:
-  tempPauseSeconds: 30
-  forwardTimeoutSeconds: 600
-  modelsCacheTTLSeconds: 60
-  maxFailoverSwitches: 8
-  routeBatchConcurrency: 8
-  usageErrorBodyBytes: 32768
-  usageErrorMsgRunes: 500
-  usageErrorHeaderValueRunes: 8192
-  usageErrorHeadersJSONBytes: 65536
 ```
 
 - `proxy.enabled`：是否启用全局代理。
@@ -473,8 +427,7 @@ gateway:
 - `proxy.host` / `proxy.port`：代理地址和端口。
 - `proxy.username` / `proxy.password`：代理认证信息，可留空。
 - `upstream.timeoutSeconds`：访问上游站点的请求超时时间。
-- `upstream.userAgent`：访问上游站点时使用的 `User-Agent`（网关管理侧拉模型/探测的默认 UA 回落值）。
-- `gateway.*`：请求转发网关运行时参数（转发超时、模型列表缓存、临时暂停、批量运维并发、用量错误落库截断等），可在系统设置中热更新。
+- `upstream.userAgent`：访问上游站点时使用的 `User-Agent`。
 - `proxy.enabled=false` 时，即使上游渠道、通知渠道或验证码服务开启 `proxy_enabled`，也不会走代理。
 
 代理测试接口：
@@ -822,308 +775,6 @@ POST /api/channels/:id/clear-login-info
 }
 ```
 
-## 请求网关使用说明
-
-请求网关把多个上游（已监控的 NewAPI/Sub2API 渠道，或网关内维护的直连 Provider）聚合成统一的 OpenAI / Anthropic / Responses 兼容入口。客户端只持有一把**网关密钥**；真实上游密钥、倍率、协议与故障切换都由服务端处理。
-
-### 概念一览
-
-| 概念 | 说明 |
-|------|------|
-| **网关组 (Group)** | 配置单元：路由表、组级模型映射、模型列表、重试/顺延/冷却/首字超时、组级 UA |
-| **网关密钥 (Key)** | 客户端鉴权用；绑定到组；支持额度、IP 黑白名单；明文只在创建/揭示时可见 |
-| **路由 (Route)** | 一条可调度的上游目标：同步渠道+源分组，或直连 Provider；含权重、倍率换算、协议、UA 策略 |
-| **直连渠道 (Provider)** | 网关内维护的 base URL + API Key + 默认计费倍率等，无需先做成监控渠道 |
-| **模型映射** | 客户端模型名 → 上游模型名；组映射与路由映射可叠加（先路由后组）；支持 `"*"` 通配 |
-| **模型列表** | 暴露给 `/v1/models` 的清单；`auto` / `manual` / `hybrid` 三种维护模式 |
-
-### 推荐上手流程
-
-1. **准备上游**
-   - 方式 A：在监控里已有 NewAPI/Sub2API 渠道，并知道要用的源分组。
-   - 方式 B：在网关页「直连渠道」新建 Provider（填 base URL、密钥、协议与默认计费倍率）。
-2. **创建网关组**
-   设置排序方向（倍率升/降）、是否扫描后重排、重试与顺延、可选首字超时、组级 UA。
-3. **添加路由**
-   选 monitor 或 provider；配置权重、倍率换算、`upstream_protocol`、UA 模式；保存后可点「确保上游密钥」（仅 monitor 路由）。
-4. **模型**
-   配置组/路由映射；用「预览 / 同步 / 探测」维护模型列表。
-5. **创建网关密钥**
-   把明文 `sk-...` 交给客户端（只显示一次，之后需用「揭示」）。
-6. **客户端**
-   Base URL 指向本服务（如 `http://host:8080`），路径用 `/v1/...`，鉴权见下。
-
-### 客户端鉴权
-
-```http
-Authorization: Bearer sk-...
-```
-
-或：
-
-```http
-x-api-key: sk-...
-```
-
-鉴权规则：
-
-- 密钥须为 **active**，所属组须为 **active**。
-- 若配置了 IP 白名单，请求 IP 必须命中白名单；若配置了黑名单，命中则拒绝。
-- 若设置了额度 `quota > 0`，则 `quota_used >= quota` 时拒绝。
-- 鉴权失败时按客户端协议返回错误体（OpenAI / Anthropic 形态）。
-
-### 公开端点（无需后台登录）
-
-下列路径由网关注册，**使用网关密钥**访问（与管理后台 `/api/*` 分离）：
-
-| 类别 | 路径 |
-|------|------|
-| 发现 | `GET /v1`（无 SPA 时也可 `GET /`）返回 endpoints 列表 |
-| 模型 | `GET /v1/models`；Codex `GET /backend-api/codex/models`；Gemini `GET /v1beta/models` |
-| Chat | `POST /v1/chat/completions`、`POST /v1/completions`；别名 `POST /chat/completions` |
-| Responses | `POST /v1/responses`、`POST /v1/responses/*`；别名 `/responses`、`/backend-api/codex/responses` |
-| Anthropic | `POST /v1/messages`、`POST /v1/messages/count_tokens`；Antigravity 前缀同 Messages |
-| 透传 | embeddings / images / videos / alpha 等：改 model 后按上游 path 转发，不做 chat↔messages 转换 |
-| 用量 | `GET /v1/usage`（依赖网关密钥） |
-
-流式：请求体 `stream: true`（或等价字段）时走 SSE；Chat 流式会尽量强制 `stream_options.include_usage` 以便末帧统计 usage。
-
-### 请求处理流程（简述）
-
-```text
-客户端 → 鉴权(密钥/IP/额度) → 读 body → 取 model
-       → 按组策略排序可调度路由
-       → 对每条路由:
-            模型映射 → 解析上游协议(auto/固定)
-            → 必要时协议转换 body / path
-            → 发起上游 HTTP（可选首字超时）
-            → 成功则回写客户端（流式可增量转换）并记 usage
-            → 失败且可顺延则临时暂停路由，试下一条
-       → 全部失败则返回最后错误
-```
-
-### 协议与互转
-
-| 入站（客户端） | 上游（路由） | 行为 |
-|----------------|--------------|------|
-| Chat | Chat | 同形态；流式可补 include_usage |
-| Chat | Anthropic | body + path 转换；SSE 增量或缓冲转换 |
-| Chat | Responses | 转 `/v1/responses` |
-| Anthropic | Anthropic | 同形态 |
-| Anthropic | Chat / Responses | 互转 |
-| Responses | Chat / Anthropic / Responses | 互转或同形态 |
-| embeddings 等透传 | 任意 | 不转 chat/messages 语义，只改 model |
-
-路由字段 `upstream_protocol`：
-
-- `auto`：模型名像 Claude 系 → Anthropic；否则跟随入站（Chat 入站不会静默升到 Responses）
-- `openai` / `openai_chat`：上游 Chat Completions
-- `openai_responses`：上游 Responses
-- `anthropic`：上游 Messages
-
-### 调度与计费倍率
-
-- 仅 **enabled** 且未在临时暂停期内的路由参与调度。
-- 排序：有效倍率（组方向 asc/desc）→ 权重 → position。
-- 有效倍率（网关路由倍率换算）：
-  1. `custom` → 使用自定义值
-  2. 能匹配源分组 → 用实时 ratio 按 raw / ×100 / ÷100 换算
-  3. 否则用路由上已落库的「账号计费倍率」
-  4. 再回落换算默认值
-- 开启组的「倍率扫描后重排」时，定时倍率扫描结束后会重写相关组的路由顺序与计费倍率快照。
-- 费用：`base_cost` 按模型单价 × token 桶；`actual_cost = base_cost × 账号计费倍率`（只乘一次）。
-
-### 故障转移与首字超时
-
-- 默认可顺延：无响应、429、5xx；组开启「4xx 顺延」时全部 4xx 也可顺延。
-- 失败路由可写入临时不可调度截止时间（冷却秒数，默认来自 `gateway.tempPauseSeconds` / 组配置）。
-- 组级：`retry_count`、`failover_max`、`cooldown_seconds`。
-- **首字超时**：配置后，仅当「本请求仍可切换到其它路由」时启用；最后一条可试路由会关闭首字掐断，避免无意义超时。
-- 流式一旦已向客户端提交有效 SSE，一般不再切换路由（避免半截双流）。
-
-### 模型列表模式
-
-- `auto`：主要来自各路由上游 `/models` 同步结果去重合并。
-- `manual`：以手工/自定义清单为准。
-- `hybrid`：同步结果与自定义项合并。
-管理页可「预览」「同步」「按模型探测」；公开 `GET /v1/models` 有短时缓存（`gateway.modelsCacheTTLSeconds`）。
-
-### User-Agent
-
-路由 `user_agent_mode`：
-
-- `passthrough`：转发路径不重写客户端 UA
-- `group`：使用组级 UA（空则不重写）
-- `custom`：使用路由自定义 UA
-
-管理侧拉模型 / 探测无客户端 UA 时，空结果会回落到 `upstream.userAgent` 或内置默认。
-
-### 请求 ID 与排障
-
-- 网关为每次请求生成独立的 **X-Upstream-Ops-Request-Id**（24 位 hex），用于用量记录关联；**不会**用客户端自带的 `X-Request-Id` 作为主键，避免重放污染。
-- 客户端的 request id 头会原样转上游；响应中附加网关专用头，不覆盖上游/客户端的 `X-Request-Id`。
-- 用量页可按 request id、模型、组、成功失败筛选；失败记录含截断后的上游错误摘要与（脱敏）响应头。
-
-### 路由来源：监控渠道 vs 直连 Provider
-
-| | **Monitor 路由** | **Provider 路由** |
-|--|------------------|-------------------|
-| 上游从哪来 | 已监控的 NewAPI/Sub2API 渠道 + 源分组 | 网关内 Provider（base URL + 密钥） |
-| 密钥 | 可「确保上游密钥」创建/复用专用源 Key | Provider 自身密钥；不走 ensure |
-| 计费倍率 | 可跟源分组实时 ratio + 换算 | 默认用 Provider 默认计费倍率；也可 custom |
-| 适用场景 | 与余额/倍率监控同一套渠道 | 临时上游、未纳入监控的直连 API |
-
-同一组可混用两类路由；调度与故障转移规则相同。
-
-### 用量与计费记录
-
-每次转发（成功或失败）会尽量落一条用量记录，字段风格对齐 sub2api，便于对账：
-
-- 关联：网关 request id、组、密钥、路由、endpoint、入站/上游协议
-- Token：prompt / completion / total，以及缓存读写等分桶（上游有则记）
-- 费用：`base_cost`（模型单价 × token）、`actual_cost`（再乘账号计费倍率一次）
-- 时延：总延迟、首字延迟（流式）
-- 结果：成功 / 失败；失败含截断后的上游错误摘要与脱敏响应头
-
-管理页：列表筛选、stats 聚合、按模型筛选项、清理接口。客户端可用 `GET /v1/usage`（网关密钥）查看自身用量（以接口实际返回为准）。
-
-### 兼容路径速查
-
-除标准 `/v1/*` 外还注册了别名与多产品路径，便于把现有客户端 Base URL 指过来：
-
-| 客户端习惯路径 | 网关行为 |
-|----------------|----------|
-| `/chat/completions`、`/embeddings` | 等同对应 `/v1/...` Chat 系转发 |
-| `/responses`、`/backend-api/codex/responses` | Responses |
-| `/backend-api/codex/models` | 模型列表 |
-| `/v1beta/models` 等 Gemini 风格 | 模型列表兼容 |
-| `/antigravity/v1/messages`、`/antigravity/v1/models` | Anthropic Messages / 模型 |
-
-完整列表以运行中 `GET /v1` 的 endpoints 发现响应为准。
-
-### 配置示例
-
-**Chat 客户端 → Claude 上游（路由协议 anthropic）**
-
-```bash
-curl -s http://127.0.0.1:8080/v1/chat/completions \
-  -H "Authorization: Bearer sk-你的网关密钥" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-sonnet-4",
-    "messages": [{"role":"user","content":"hi"}],
-    "stream": false
-  }'
-```
-
-**Anthropic 客户端**
-
-```bash
-curl -s http://127.0.0.1:8080/v1/messages \
-  -H "x-api-key: sk-你的网关密钥" \
-  -H "anthropic-version: 2023-06-01" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "claude-sonnet-4",
-    "max_tokens": 256,
-    "messages": [{"role":"user","content":"hi"}]
-  }'
-```
-
-**Responses 客户端（流式）**
-
-```bash
-curl -sN http://127.0.0.1:8080/v1/responses \
-  -H "Authorization: Bearer sk-你的网关密钥" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4o",
-    "input": "hi",
-    "stream": true
-  }'
-```
-
-**模型映射 JSON 示例（组或路由）**
-
-```json
-{
-  "gpt-4o": "gpt-4o-2024-11-20",
-  "claude-sonnet-4": "claude-sonnet-4-20250514",
-  "*": "gpt-4o-mini"
-}
-```
-
-先精确匹配，再 `"*"`；组映射与路由映射叠加时，先应用路由映射再应用组映射。
-
-### 运行时配置（`gateway` 段）
-
-可在 `config.yaml` 或系统设置中调整，**应用配置后热更新**（无需重启进程）。字段 ≤0 时回落内置默认：
-
-| 配置项 | 默认 | 含义 |
-|--------|------|------|
-| `tempPauseSeconds` | 30 | 新建组默认路由冷却（临时不可调度）秒数 |
-| `forwardTimeoutSeconds` | 600 | 单次上游转发 / 流式 drain 超时（秒） |
-| `modelsCacheTTLSeconds` | 60 | 公开 `GET /v1/models` 缓存 TTL |
-| `maxFailoverSwitches` | 8 | 新建组默认最大顺延切换次数 |
-| `routeBatchConcurrency` | 8（上限 64） | 批量探测 / ensure / 同步模型等运维并发 |
-| `usageErrorBodyBytes` | 32768 | 用量错误 body 落库上限（字节） |
-| `usageErrorMsgRunes` | 500 | 用量错误摘要字符上限 |
-| `usageErrorHeaderValueRunes` | 8192 | 单条错误响应头值截断 |
-| `usageErrorHeadersJSONBytes` | 65536 | 错误响应头 JSON 总上限 |
-
-注意：`upstream.timeoutSeconds` 主要影响**监控侧**访问上游站点（登录、同步等）；网关转发超时看 `gateway.forwardTimeoutSeconds`。两者不要混用。
-
-组级策略（`retry_count` / `failover_max` / `cooldown_seconds` / 首字超时等）在组上单独配置；未填时会参考上述网关默认。
-
-### 管理 API（需后台登录 Token）
-
-管理接口在 `/api/gateway/*`，与公开 `/v1/*` 鉴权体系不同（走管理后台 HMAC token）。
-
-```text
-GET/POST     /api/gateway/groups
-PUT          /api/gateway/groups/reorder
-GET/PUT/DELETE /api/gateway/groups/:id
-GET/POST     /api/gateway/groups/:id/keys
-GET/PUT      /api/gateway/groups/:id/routes
-POST         /api/gateway/groups/:id/routes/ensure-keys
-GET          /api/gateway/groups/:id/models/preview
-POST         /api/gateway/groups/:id/models/sync
-POST         /api/gateway/groups/:id/models/test
-PUT/DELETE   /api/gateway/keys/:id
-POST         /api/gateway/keys/:id/reveal
-POST         /api/gateway/routes/:id/clear-pause
-GET/POST     /api/gateway/providers
-GET          /api/gateway/providers/options
-PUT/DELETE   /api/gateway/providers/:id
-POST         /api/gateway/providers/:id/reveal
-GET          /api/gateway/usage
-GET          /api/gateway/usage/stats
-GET          /api/gateway/usage/models
-POST         /api/gateway/usage/cleanup
-GET/PUT      /api/gateway/prices
-GET          /api/gateway/prices/defaults
-DELETE       /api/gateway/prices/:id
-```
-
-### 后端结构（开发者）
-
-网关代码位于 `backend/gateway`：
-
-- `Service`：组装根与对外兼容委托
-- `AdminService`：分组 / 密钥 / 路由 / 直连渠道 / 模型同步
-- `Runtime`：鉴权、转发、流式、用量落库
-- `protocol`：Chat / Messages / Responses 协议互转（含 SSE 状态机）
-- 运行时默认值：`backend/config` 的 `GatewayConfig` / `gateway.*`
-
-### 常见问题
-
-- **401 / invalid api key**：确认用的是网关密钥而非上游密钥；密钥与组均为启用。
-- **无路由 / 502**：组内是否有 enabled 路由；是否全部在临时暂停中（可「清除暂停」）。
-- **模型 404 / 上游 400**：检查映射后的上游模型名、路由 `upstream_protocol` 是否与真实上游一致。
-- **费用为 0 或不准**：内置价目是否覆盖该模型；可在「价格」页覆盖单价；账号计费倍率是否与源分组一致。
-- **流式中途断了又重试**：若已写出 SSE 则不会换路由；客户端断开与上游错误会分别记在用量里。
-- **确保密钥失败**：monitor 路由需要 ChannelAPI 可用、渠道登录有效；直连 Provider 不走 ensure。
-
 ## API Key 管理说明
 
 API Key 管理依赖上游自身接口，不同上游字段存在差异。
@@ -1325,7 +976,7 @@ data: {“event”:”progress”,”message”:”...”,”step”:1,”total�
 
 系统设置页支持运行时热重载，无需重启服务即可使配置生效：
 
-- 可热重载的配置模块：`app`（应用设置）、`auth`（登录鉴权）、`scheduler`（调度器）、`notifications`（通知策略）、`retention`（数据保留）、`proxy`（全局代理）、`upstream`（上游 HTTP 配置）、`gateway`（请求转发网关运行时参数）。
+- 可热重载的配置模块：`app`（应用设置）、`auth`（登录鉴权）、`scheduler`（调度器）、`notifications`（通知策略）、`retention`（数据保留）、`proxy`（全局代理）、`upstream`（上游 HTTP 配置）。
 - 点击”应用配置”后，调度器会按新的 cron 间隔重启，通知策略（合并策略、最小变化百分比、订阅告警阈值、冷却时间等）会即时更新。
 - 验证码服务和通知渠道的增删改本身即写库实时生效，无需额外应用。
 - 其他配置（如数据库连接、HTTP 端口、日志等级）需要重启服务。
@@ -1348,7 +999,7 @@ data: {“event”:”progress”,”message”:”...”,”step”:1,”total�
 - 上游公告按”公告保留天数”清理，0 表示不清理。
 - 倍率变化日志默认不清理。
 
-这些配置可以在系统设置页调整，也可以通过配置文件和环境变量管理。点击”应用配置”后，`app`、`auth`、`scheduler`、`notifications`、`retention`、`proxy`、`upstream`、`gateway` 会立即生效，调度器会按新配置重启。
+这些配置可以在系统设置页调整，也可以通过配置文件和环境变量管理。点击”应用配置”后，`app`、`auth`、`scheduler`、`notifications`、`retention`、`proxy`、`upstream` 会立即生效，调度器会按新配置重启。
 
 订阅告警阈值配置（在系统设置 -> 通知配置中调整）：
 

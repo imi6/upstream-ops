@@ -14,13 +14,8 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-// 单渠道扫描超时在 monitor 层控制；这里只给「扫描之后的收尾动作」留预算。
-const (
-	// captchaRefreshBudget 打码平台余额刷新的总预算。
-	captchaRefreshBudget = 2 * time.Minute
-	// rateResortBudget 倍率扫描后的网关路由重排预算。
-	rateResortBudget = 2 * time.Minute
-)
+// captchaRefreshBudget 打码平台余额刷新的总预算。
+const captchaRefreshBudget = 2 * time.Minute
 
 // Scheduler 周期性任务调度器。
 type Scheduler struct {
@@ -34,13 +29,7 @@ type Scheduler struct {
 	announcements *storage.UpstreamAnnouncements
 	captchas      *storage.Captchas
 	cipher        *crypto.Cipher
-	gatewayResort gatewayRateResortService
 	proxy         config.ProxyConfig
-}
-
-// gatewayRateResortService 倍率扫描后重排开启了「渠道分组价格倍率重排」的网关组。
-type gatewayRateResortService interface {
-	ResortRoutesOnRateScan(ctx context.Context)
 }
 
 // New 构造调度器。
@@ -53,7 +42,6 @@ func New(
 	announcements *storage.UpstreamAnnouncements,
 	captchas *storage.Captchas,
 	cipher *crypto.Cipher,
-	gatewayResort gatewayRateResortService,
 	proxy config.ProxyConfig,
 	log *slog.Logger,
 ) *Scheduler {
@@ -76,7 +64,6 @@ func New(
 		announcements: announcements,
 		captchas:      captchas,
 		cipher:        cipher,
-		gatewayResort: gatewayResort,
 		proxy:         proxy,
 	}
 }
@@ -135,14 +122,8 @@ func (s *Scheduler) runBalance() {
 }
 
 func (s *Scheduler) runRates() {
-	ctx := context.Background()
 	if s.monitor != nil {
-		s.monitor.ScanAllRates(ctx)
-	}
-	if s.gatewayResort != nil {
-		resortCtx, cancel := context.WithTimeout(ctx, rateResortBudget)
-		defer cancel()
-		s.gatewayResort.ResortRoutesOnRateScan(resortCtx)
+		s.monitor.ScanAllRates(context.Background())
 	}
 }
 

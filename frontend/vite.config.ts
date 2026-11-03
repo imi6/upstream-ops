@@ -19,10 +19,9 @@ export default defineConfig({
     port: 3010,
     strictPort: true,
     proxy: {
-      // 仅代理后端 API / 健康检查 / 公开转发；/gateway 是前端 SPA 页面，不要代理。
+      // 仅代理后端 API / 健康检查；前端页面走 SPA 路由，不要代理。
       '/api':     { target: BACKEND_TARGET, changeOrigin: true },
       '/healthz': { target: BACKEND_TARGET, changeOrigin: true },
-      '/v1':      { target: BACKEND_TARGET, changeOrigin: true },
     },
   },
 })

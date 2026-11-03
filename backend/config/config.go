@@ -1,4 +1,4 @@
-// Package config 定义应用配置结构体与默认值（含 gateway 运行时参数）。
+// Package config 定义应用配置结构体与默认值。
 package config
 
 import (
@@ -23,8 +23,6 @@ type Config struct {
 	Notifications NotificationsConfig `mapstructure:"notifications" yaml:"notifications" json:"notifications"`
 	Proxy         ProxyConfig         `mapstructure:"proxy" yaml:"proxy" json:"proxy"`
 	Upstream      UpstreamConfig      `mapstructure:"upstream" yaml:"upstream" json:"upstream"`
-	Gateway       GatewayConfig       `mapstructure:"gateway" yaml:"gateway" json:"gateway"`
-	Pricing       PricingConfig       `mapstructure:"pricing" yaml:"pricing" json:"pricing"`
 	Log           LogConfig           `mapstructure:"log" yaml:"log" json:"log"`
 }
 
@@ -138,63 +136,11 @@ type ProxyConfig struct {
 const (
 	DefaultUpstreamTimeoutSeconds = 30
 	DefaultUpstreamUserAgent      = "upstream-ops/0.1"
-
-	// 网关默认值（设置页可改；0/空表示使用下列默认）。
-	DefaultGatewayTempPauseSeconds           = 30
-	DefaultGatewayForwardTimeoutSeconds      = 600 // 10 分钟
-	DefaultGatewayModelsCacheTTLSeconds      = 60
-	DefaultGatewayMaxFailoverSwitches        = 8
-	DefaultGatewayRouteBatchConcurrency      = 8
-	DefaultGatewayUsageErrorBodyBytes        = 32 * 1024
-	DefaultGatewayUsageErrorMsgRunes         = 500
-	DefaultGatewayUsageErrorHeaderValueRunes = 8 * 1024
-	DefaultGatewayUsageErrorHeadersJSONBytes = 64 * 1024
-	DefaultGatewayStreamKeepaliveSeconds     = 15
-	DefaultGatewayStreamIdleTimeoutSeconds   = 120
-	DefaultGatewayStreamMaxLineBytes         = 8 << 20
 )
 
 type UpstreamConfig struct {
 	TimeoutSeconds int    `mapstructure:"timeoutSeconds" yaml:"timeoutSeconds" json:"timeoutSeconds"`
 	UserAgent      string `mapstructure:"userAgent" yaml:"userAgent" json:"userAgent"`
-}
-
-// PricingConfig 是网关模型价目表的远程同步配置。
-type PricingConfig struct {
-	Enabled                  bool   `mapstructure:"enabled" yaml:"enabled" json:"enabled"`
-	RemoteURL                string `mapstructure:"remoteURL" yaml:"remoteURL" json:"remoteURL"`
-	HashURL                  string `mapstructure:"hashURL" yaml:"hashURL" json:"hashURL"`
-	DataDir                  string `mapstructure:"dataDir" yaml:"dataDir" json:"dataDir"`
-	FallbackFile             string `mapstructure:"fallbackFile" yaml:"fallbackFile" json:"fallbackFile"`
-	UpdateIntervalHours      int    `mapstructure:"updateIntervalHours" yaml:"updateIntervalHours" json:"updateIntervalHours"`
-	HashCheckIntervalMinutes int    `mapstructure:"hashCheckIntervalMinutes" yaml:"hashCheckIntervalMinutes" json:"hashCheckIntervalMinutes"`
-}
-
-const (
-	DefaultPricingRemoteURL = "https://raw.githubusercontent.com/Wei-Shaw/model-price-repo/main/model_prices_and_context_window.json"
-	DefaultPricingHashURL   = "https://raw.githubusercontent.com/Wei-Shaw/model-price-repo/main/model_prices_and_context_window.sha256"
-)
-
-func (p PricingConfig) WithDefaults() PricingConfig {
-	if strings.TrimSpace(p.RemoteURL) == "" {
-		p.RemoteURL = DefaultPricingRemoteURL
-	}
-	if strings.TrimSpace(p.HashURL) == "" {
-		p.HashURL = DefaultPricingHashURL
-	}
-	if strings.TrimSpace(p.DataDir) == "" {
-		p.DataDir = "./data"
-	}
-	if strings.TrimSpace(p.FallbackFile) == "" {
-		p.FallbackFile = "./backend/gateway/pricing/default_prices.json"
-	}
-	if p.UpdateIntervalHours <= 0 {
-		p.UpdateIntervalHours = 24
-	}
-	if p.HashCheckIntervalMinutes <= 0 {
-		p.HashCheckIntervalMinutes = 10
-	}
-	return p
 }
 
 func (u UpstreamConfig) WithDefaults() UpstreamConfig {
@@ -205,104 +151,6 @@ func (u UpstreamConfig) WithDefaults() UpstreamConfig {
 		u.UserAgent = DefaultUpstreamUserAgent
 	}
 	return u
-}
-
-// GatewayConfig 网关运行时参数（转发超时、批量运维并发、用量错误落库截断等）。
-// 可在设置页保存并「应用配置」后立即生效；字段 ≤0 时回退默认值。
-type GatewayConfig struct {
-	// TempPauseSeconds 新建组默认临时暂停时长（秒），对应路由冷却。
-	TempPauseSeconds int `mapstructure:"tempPauseSeconds" yaml:"tempPauseSeconds" json:"tempPauseSeconds"`
-	// ForwardTimeoutSeconds 单次上游转发/流式 drain 超时（秒）。
-	ForwardTimeoutSeconds int `mapstructure:"forwardTimeoutSeconds" yaml:"forwardTimeoutSeconds" json:"forwardTimeoutSeconds"`
-	// ModelsCacheTTLSeconds 公开 /v1/models 列表缓存 TTL（秒）。
-	ModelsCacheTTLSeconds int `mapstructure:"modelsCacheTTLSeconds" yaml:"modelsCacheTTLSeconds" json:"modelsCacheTTLSeconds"`
-	// MaxFailoverSwitches 新建组默认最大顺延切换次数。
-	MaxFailoverSwitches int `mapstructure:"maxFailoverSwitches" yaml:"maxFailoverSwitches" json:"maxFailoverSwitches"`
-	// RouteBatchConcurrency 批量运维并发（探测模型 / ensure 密钥 / 同步模型 / 拉源分组）。
-	RouteBatchConcurrency int `mapstructure:"routeBatchConcurrency" yaml:"routeBatchConcurrency" json:"routeBatchConcurrency"`
-	// UsageError* 用量错误明细落库截断上限（字节或 rune）。
-	UsageErrorBodyBytes        int `mapstructure:"usageErrorBodyBytes" yaml:"usageErrorBodyBytes" json:"usageErrorBodyBytes"`
-	UsageErrorMsgRunes         int `mapstructure:"usageErrorMsgRunes" yaml:"usageErrorMsgRunes" json:"usageErrorMsgRunes"`
-	UsageErrorHeaderValueRunes int `mapstructure:"usageErrorHeaderValueRunes" yaml:"usageErrorHeaderValueRunes" json:"usageErrorHeaderValueRunes"`
-	UsageErrorHeadersJSONBytes int `mapstructure:"usageErrorHeadersJSONBytes" yaml:"usageErrorHeadersJSONBytes" json:"usageErrorHeadersJSONBytes"`
-	// StreamKeepaliveSeconds 已提交 SSE 流的下游保活间隔（秒）。
-	StreamKeepaliveSeconds int `mapstructure:"streamKeepaliveSeconds" yaml:"streamKeepaliveSeconds" json:"streamKeepaliveSeconds"`
-	// StreamIdleTimeoutSeconds 上游 SSE 收到有效数据后的最大空闲时长（秒）。
-	StreamIdleTimeoutSeconds int `mapstructure:"streamIdleTimeoutSeconds" yaml:"streamIdleTimeoutSeconds" json:"streamIdleTimeoutSeconds"`
-	// StreamMaxLineBytes 上游单条 SSE 行最大字节数。
-	StreamMaxLineBytes int `mapstructure:"streamMaxLineBytes" yaml:"streamMaxLineBytes" json:"streamMaxLineBytes"`
-}
-
-func (g GatewayConfig) WithDefaults() GatewayConfig {
-	if g.TempPauseSeconds <= 0 {
-		g.TempPauseSeconds = DefaultGatewayTempPauseSeconds
-	}
-	if g.ForwardTimeoutSeconds <= 0 {
-		g.ForwardTimeoutSeconds = DefaultGatewayForwardTimeoutSeconds
-	}
-	if g.ModelsCacheTTLSeconds <= 0 {
-		g.ModelsCacheTTLSeconds = DefaultGatewayModelsCacheTTLSeconds
-	}
-	if g.MaxFailoverSwitches <= 0 {
-		g.MaxFailoverSwitches = DefaultGatewayMaxFailoverSwitches
-	}
-	if g.RouteBatchConcurrency <= 0 {
-		g.RouteBatchConcurrency = DefaultGatewayRouteBatchConcurrency
-	}
-	if g.RouteBatchConcurrency > 64 {
-		g.RouteBatchConcurrency = 64
-	}
-	if g.UsageErrorBodyBytes <= 0 {
-		g.UsageErrorBodyBytes = DefaultGatewayUsageErrorBodyBytes
-	}
-	if g.UsageErrorMsgRunes <= 0 {
-		g.UsageErrorMsgRunes = DefaultGatewayUsageErrorMsgRunes
-	}
-	if g.UsageErrorHeaderValueRunes <= 0 {
-		g.UsageErrorHeaderValueRunes = DefaultGatewayUsageErrorHeaderValueRunes
-	}
-	if g.UsageErrorHeadersJSONBytes <= 0 {
-		g.UsageErrorHeadersJSONBytes = DefaultGatewayUsageErrorHeadersJSONBytes
-	}
-	if g.StreamKeepaliveSeconds <= 0 {
-		g.StreamKeepaliveSeconds = DefaultGatewayStreamKeepaliveSeconds
-	}
-	if g.StreamIdleTimeoutSeconds <= 0 {
-		g.StreamIdleTimeoutSeconds = DefaultGatewayStreamIdleTimeoutSeconds
-	}
-	if g.StreamMaxLineBytes <= 0 {
-		g.StreamMaxLineBytes = DefaultGatewayStreamMaxLineBytes
-	}
-	return g
-}
-
-func (g GatewayConfig) TempPause() time.Duration {
-	g = g.WithDefaults()
-	return time.Duration(g.TempPauseSeconds) * time.Second
-}
-
-func (g GatewayConfig) ForwardTimeout() time.Duration {
-	g = g.WithDefaults()
-	return time.Duration(g.ForwardTimeoutSeconds) * time.Second
-}
-
-func (g GatewayConfig) ModelsCacheTTL() time.Duration {
-	g = g.WithDefaults()
-	return time.Duration(g.ModelsCacheTTLSeconds) * time.Second
-}
-
-func (g GatewayConfig) StreamKeepalive() time.Duration {
-	g = g.WithDefaults()
-	return time.Duration(g.StreamKeepaliveSeconds) * time.Second
-}
-
-func (g GatewayConfig) StreamIdleTimeout() time.Duration {
-	g = g.WithDefaults()
-	return time.Duration(g.StreamIdleTimeoutSeconds) * time.Second
-}
-
-func (g GatewayConfig) StreamMaxLineSize() int {
-	return g.WithDefaults().StreamMaxLineBytes
 }
 
 type LogConfig struct {
@@ -391,8 +239,6 @@ func load(path string, withEnv bool) (*Config, string, error) {
 		return nil, "", fmt.Errorf("unmarshal config: %w", err)
 	}
 	cfg.Upstream = cfg.Upstream.WithDefaults()
-	cfg.Gateway = cfg.Gateway.WithDefaults()
-	cfg.Pricing = cfg.Pricing.WithDefaults()
 	return cfg, v.ConfigFileUsed(), nil
 }
 
@@ -490,26 +336,7 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("upstream.timeoutSeconds", DefaultUpstreamTimeoutSeconds)
 	v.SetDefault("upstream.userAgent", DefaultUpstreamUserAgent)
-	v.SetDefault("pricing.enabled", true)
-	v.SetDefault("pricing.remoteURL", DefaultPricingRemoteURL)
-	v.SetDefault("pricing.hashURL", DefaultPricingHashURL)
-	v.SetDefault("pricing.dataDir", "./data")
-	v.SetDefault("pricing.fallbackFile", "./backend/gateway/pricing/default_prices.json")
-	v.SetDefault("pricing.updateIntervalHours", 24)
-	v.SetDefault("pricing.hashCheckIntervalMinutes", 10)
 
-	v.SetDefault("gateway.tempPauseSeconds", DefaultGatewayTempPauseSeconds)
-	v.SetDefault("gateway.forwardTimeoutSeconds", DefaultGatewayForwardTimeoutSeconds)
-	v.SetDefault("gateway.modelsCacheTTLSeconds", DefaultGatewayModelsCacheTTLSeconds)
-	v.SetDefault("gateway.maxFailoverSwitches", DefaultGatewayMaxFailoverSwitches)
-	v.SetDefault("gateway.routeBatchConcurrency", DefaultGatewayRouteBatchConcurrency)
-	v.SetDefault("gateway.usageErrorBodyBytes", DefaultGatewayUsageErrorBodyBytes)
-	v.SetDefault("gateway.usageErrorMsgRunes", DefaultGatewayUsageErrorMsgRunes)
-	v.SetDefault("gateway.usageErrorHeaderValueRunes", DefaultGatewayUsageErrorHeaderValueRunes)
-	v.SetDefault("gateway.usageErrorHeadersJSONBytes", DefaultGatewayUsageErrorHeadersJSONBytes)
-	v.SetDefault("gateway.streamKeepaliveSeconds", DefaultGatewayStreamKeepaliveSeconds)
-	v.SetDefault("gateway.streamIdleTimeoutSeconds", DefaultGatewayStreamIdleTimeoutSeconds)
-	v.SetDefault("gateway.streamMaxLineBytes", DefaultGatewayStreamMaxLineBytes)
 
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")

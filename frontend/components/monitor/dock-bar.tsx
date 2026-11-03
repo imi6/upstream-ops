@@ -5,7 +5,6 @@ import { useLocation, useNavigate } from "react-router-dom"
 import {
   Bell,
   LayoutDashboard,
-  Network,
   Plus,
   Settings,
   ShieldCheck,
@@ -171,12 +170,6 @@ export function DockBar() {
       label: "通知渠道",
       path: "/notifications",
       gradient: "from-amber-300 via-orange-500 to-rose-500",
-    },
-    {
-      icon: Network,
-      label: "请求网关",
-      path: "/gateway",
-      gradient: "from-violet-400 via-indigo-500 to-blue-600",
     },
     {
       icon: Settings,

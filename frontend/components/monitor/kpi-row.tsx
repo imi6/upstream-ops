@@ -1,14 +1,13 @@
 "use client"
 
-import { ArrowUpRight, DollarSign, Layers, MessageSquare, Wallet } from "lucide-react"
+import { ArrowUpRight, DollarSign, MessageSquare, Wallet } from "lucide-react"
 import { Card } from "@/components/ui/card"
 import { cn } from "@/lib/utils"
 import {
   useDashboardSummary,
-  useGatewayUsageStatsToday,
   useRateChanges,
 } from "@/lib/queries"
-import { formatTokens, money } from "@/lib/format"
+import { money } from "@/lib/format"
 import type { LucideIcon } from "lucide-react"
 import type { ReactNode } from "react"
 
@@ -30,7 +29,6 @@ function countTodayChanges(changes: { changed_at: string }[]) {
 export function KpiRow() {
   const summary = useDashboardSummary()
   const recentChanges = useRateChanges(1, 100)
-  const gatewayToday = useGatewayUsageStatsToday()
 
   const data = summary.data
   const total = data?.total_channels ?? 0
@@ -42,10 +40,6 @@ export function KpiRow() {
   const lowest = data?.lowest_balance ?? null
 
   const todayChangeCount = countTodayChanges(recentChanges.data?.items ?? [])
-
-  const todayTokens = gatewayToday.data?.total_tokens ?? 0
-  const todayInput = gatewayToday.data?.total_input_tokens ?? 0
-  const todayOutput = gatewayToday.data?.total_output_tokens ?? 0
 
   const kpis: Kpi[] = [
     {
@@ -86,20 +80,6 @@ export function KpiRow() {
       footer: (
         <span className="text-muted-foreground">
           {totalCost > 0 ? "全渠道累计实际扣费" : "暂无累计消费"}
-        </span>
-      ),
-    },
-    {
-      label: "今日 Token",
-      value: formatTokens(todayTokens),
-      icon: Layers,
-      iconBg: "bg-brand/10",
-      iconColor: "text-brand",
-      footer: (
-        <span className="text-muted-foreground">
-          {todayTokens > 0
-            ? `输入: ${formatTokens(todayInput)} / 输出: ${formatTokens(todayOutput)}`
-            : "网关今日暂无调用"}
         </span>
       ),
     },

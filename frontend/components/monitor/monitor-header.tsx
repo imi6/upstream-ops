@@ -8,7 +8,6 @@ import {
   LogOut,
   Menu,
   Moon,
-  Network,
   RefreshCw,
   Settings,
   Sun,
@@ -207,10 +206,6 @@ export function MonitorHeader() {
                 <Home className="size-4" />
                 主页
               </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => navigate("/gateway")}>
-                <Network className="size-4" />
-                请求网关
-              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => navigate("/settings")}>
                 <Settings className="size-4" />
                 系统设置
@@ -258,23 +253,6 @@ export function MonitorHeader() {
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
                 {"主页"}
-              </TooltipContent>
-            </Tooltip>
-
-            <Tooltip delayDuration={200}>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => navigate("/gateway")}
-                  className="size-8 border-border bg-background text-foreground hover:bg-muted"
-                  aria-label="请求网关"
-                >
-                  <Network className="size-3.5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="text-xs">
-                {"请求网关"}
               </TooltipContent>
             </Tooltip>
 
