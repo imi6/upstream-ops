@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bejix/upstream-ops/backend/channel"
@@ -24,6 +25,10 @@ type Service struct {
 	channelSvc    *channel.Service
 	dispatcher    *notify.Dispatcher
 	log           *slog.Logger
+
+	// mu 保护 concurrency（配置热重载时会被写入，扫描 goroutine 读）。
+	mu          sync.RWMutex
+	concurrency int
 }
 
 func NewService(
@@ -52,71 +57,162 @@ func NewService(
 // 只影响它自己，不会把整轮扫描的预算吃光、让后面的渠道拿到已过期的 context。
 const ChannelScanTimeout = 90 * time.Second
 
-// scanBudget 按渠道数推算整轮扫描的总预算，保证每个渠道都能分到一份 ChannelScanTimeout。
-func scanBudget(channelCount int) time.Duration {
+// DefaultScanConcurrency 扫描并发度兜底值，与 config 里 scheduler.concurrency 的默认值一致。
+const DefaultScanConcurrency = 4
+
+// MaxScanConcurrency 并发上限，防止把上游和本机连接数打满。
+const MaxScanConcurrency = 64
+
+// SetConcurrency 设置整轮扫描的最大并发渠道数（来自 scheduler.concurrency）。
+// n <= 0 时回落到 DefaultScanConcurrency。可在运行期调用（配置热重载）。
+func (s *Service) SetConcurrency(n int) {
+	if n <= 0 {
+		n = DefaultScanConcurrency
+	}
+	if n > MaxScanConcurrency {
+		n = MaxScanConcurrency
+	}
+	s.mu.Lock()
+	s.concurrency = n
+	s.mu.Unlock()
+}
+
+func (s *Service) scanConcurrency() int {
+	s.mu.RLock()
+	n := s.concurrency
+	s.mu.RUnlock()
+	if n <= 0 {
+		return DefaultScanConcurrency
+	}
+	return n
+}
+
+// scanBudget 按渠道数和并发度推算整轮扫描的总预算。
+// 并发跑时整轮耗时约为「渠道数 / 并发度」份单渠道超时，再留 2 分钟余量。
+func scanBudget(channelCount, concurrency int) time.Duration {
 	if channelCount < 1 {
 		channelCount = 1
 	}
-	return time.Duration(channelCount)*ChannelScanTimeout + 2*time.Minute
+	if concurrency < 1 {
+		concurrency = 1
+	}
+	rounds := (channelCount + concurrency - 1) / concurrency
+	return time.Duration(rounds)*ChannelScanTimeout + 2*time.Minute
 }
 
-// ScanAllBalances 扫描所有启用监控的渠道余额。单个失败不影响其他。
+// ScanAllBalances 并发扫描所有启用监控的渠道余额。单个失败不影响其他。
 func (s *Service) ScanAllBalances(ctx context.Context) {
 	list, err := s.channels.ListMonitorEnabled()
 	if err != nil {
 		s.log.Error("list channels", "err", err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, scanBudget(len(list)))
-	defer cancel()
-
-	for i := range list {
-		if err := ctx.Err(); err != nil {
-			s.log.Warn("balance scan aborted", "remaining", len(list)-i, "err", err)
-			return
-		}
-		s.scanChannelBalance(ctx, &list[i])
-	}
-}
-
-func (s *Service) scanChannelBalance(ctx context.Context, c *storage.Channel) {
-	chCtx, cancel := context.WithTimeout(ctx, ChannelScanTimeout)
-	defer cancel()
-
-	if err := s.RefreshBalance(chCtx, c); err != nil {
-		s.log.Warn("refresh balance failed", "channel", c.Name, "err", err)
+	if len(list) == 0 {
 		return
 	}
-	if err := s.CheckSubscriptionUsageAlerts(chCtx, c); err != nil {
-		s.log.Warn("check subscription usage failed", "channel", c.Name, "err", err)
+	ctx, cancel := context.WithTimeout(ctx, scanBudget(len(list), s.scanConcurrency()))
+	defer cancel()
+
+	s.forEachChannel(ctx, list, "balance", func(chCtx context.Context, c *storage.Channel, _ int) {
+		if err := s.RefreshBalance(chCtx, c); err != nil {
+			s.log.Warn("refresh balance failed", "channel", c.Name, "err", err)
+			return
+		}
+		if err := s.CheckSubscriptionUsageAlerts(chCtx, c); err != nil {
+			s.log.Warn("check subscription usage failed", "channel", c.Name, "err", err)
+		}
+	})
+}
+
+// forEachChannel 以受限并发遍历渠道，每条渠道单独计时（ChannelScanTimeout）。
+// 整体 ctx 到期后不再启动新渠道，剩余的直接记为跳过。
+// fn 的第二个参数是渠道在 list 中的下标，供调用方按下标写回结果（避免共享状态竞争）。
+func (s *Service) forEachChannel(
+	ctx context.Context,
+	list []storage.Channel,
+	job string,
+	fn func(ctx context.Context, c *storage.Channel, index int),
+) {
+	var (
+		wg       sync.WaitGroup
+		total    = len(list)
+		launched int
+	)
+	sem := make(chan struct{}, s.scanConcurrency())
+
+dispatch:
+	for i := range list {
+		c := list[i]
+		idx := i
+		select {
+		case sem <- struct{}{}:
+			launched++
+		case <-ctx.Done():
+			break dispatch
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			// 自起的 goroutine panic 不会被打包层的 recovery 兜住，这里单独兜一层，
+			// 否则一个渠道的异常会打挂整个进程。
+			defer func() {
+				if r := recover(); r != nil {
+					s.log.Error("scan channel panic", "job", job, "channel", c.Name, "panic", r)
+				}
+			}()
+
+			chCtx, cancel := context.WithTimeout(ctx, ChannelScanTimeout)
+			defer cancel()
+			fn(chCtx, &c, idx)
+		}()
+	}
+
+	wg.Wait()
+	if launched < total {
+		s.log.Warn("scan skipped channels", "job", job, "skipped", total-launched, "total", total)
 	}
 }
 
-// ScanAllRates 扫描所有启用监控的渠道倍率。
+// ScanAllRates 并发扫描所有启用监控的渠道倍率。
+//
+// 每条渠道把变化写进自己的 batch，全部结束后按渠道顺序合并，
+// 避免并发写同一个 batch 造成数据竞争，也让通知里各渠道的顺序稳定。
 func (s *Service) ScanAllRates(ctx context.Context) {
 	list, err := s.channels.ListMonitorEnabled()
 	if err != nil {
 		s.log.Error("list channels", "err", err)
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, scanBudget(len(list)))
+	if len(list) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, scanBudget(len(list), s.scanConcurrency()))
 	defer cancel()
 
-	batch := notify.RateNotificationBatch{}
-	for i := range list {
-		if err := ctx.Err(); err != nil {
-			s.log.Warn("rate scan aborted", "remaining", len(list)-i, "err", err)
-			break
+	batches := make([]notify.RateNotificationBatch, len(list))
+	s.forEachChannel(ctx, list, "rates", func(chCtx context.Context, c *storage.Channel, index int) {
+		if err := s.refreshRates(chCtx, c, &batches[index]); err != nil {
+			s.log.Warn("refresh rates failed", "channel", c.Name, "err", err)
 		}
-		chCtx, cancelChannel := context.WithTimeout(ctx, ChannelScanTimeout)
-		if err := s.refreshRates(chCtx, &list[i], &batch); err != nil {
-			s.log.Warn("refresh rates failed", "channel", list[i].Name, "err", err)
-		}
-		cancelChannel()
-	}
+	})
+
+	batch := mergeRateNotificationBatches(batches)
 	if !batch.Empty() {
 		_ = s.dispatcher.DispatchRateNotificationBatch(ctx, batch)
 	}
+}
+
+// mergeRateNotificationBatches 按渠道顺序合并各渠道的倍率变化。
+func mergeRateNotificationBatches(batches []notify.RateNotificationBatch) notify.RateNotificationBatch {
+	var out notify.RateNotificationBatch
+	for i := range batches {
+		out.Changed = append(out.Changed, batches[i].Changed...)
+		out.Added = append(out.Added, batches[i].Added...)
+		out.Removed = append(out.Removed, batches[i].Removed...)
+	}
+	return out
 }
 
 // RefreshBalance 单个渠道余额刷新，可被 API 手动触发。

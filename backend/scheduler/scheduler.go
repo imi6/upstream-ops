@@ -99,6 +99,11 @@ func (s *Scheduler) Start() error {
 		}
 	}
 	s.cron.Start()
+	// 把并发度下发给 monitor：定时扫描按这个值限制同时在跑的渠道数。
+	// 配置热重载会新建 Scheduler 并 Start，所以这里下发即可覆盖新配置。
+	if s.monitor != nil {
+		s.monitor.SetConcurrency(s.cfg.Concurrency)
+	}
 	s.log.Info("scheduler started",
 		"balanceCron", s.cfg.BalanceCron,
 		"rateCron", s.cfg.RateCron,
