@@ -34,6 +34,9 @@ type externalGroupRate struct {
 type externalAPIKeyFingerprint struct {
 	APIKeyID    int64  `json:"api_key_id"`
 	Fingerprint string `json:"fingerprint"`
+	MaskedKey   string `json:"masked_key,omitempty"`
+	KeyPrefix   string `json:"key_prefix,omitempty"`
+	KeySuffix   string `json:"key_suffix,omitempty"`
 }
 
 type externalChannelRates struct {
@@ -45,6 +48,9 @@ type externalChannelRates struct {
 	KeyFingerprintAlgorithm     string              `json:"key_fingerprint_algorithm"`
 	KeyFingerprintNormalization string              `json:"key_fingerprint_normalization"`
 	KeyFingerprintsComplete     bool                `json:"key_fingerprints_complete"`
+	KeyHintNormalization        string              `json:"key_hint_normalization"`
+	KeyHintsComplete            bool                `json:"key_hints_complete"`
+	UnavailableKeyHintIDs       []int64             `json:"unavailable_key_hint_ids"`
 	KeySyncedAt                 *time.Time          `json:"key_synced_at"`
 	KeySyncAttemptedAt          *time.Time          `json:"key_sync_attempted_at"`
 	KeySyncStatus               string              `json:"key_sync_status"`
@@ -241,6 +247,8 @@ func buildExternalChannelRates(ctx context.Context, d *Deps, ch *storage.Channel
 		KeyFingerprintAlgorithm:     "sha256",
 		KeyFingerprintNormalization: channel.APIKeyFingerprintNormalization(ch.Type),
 		KeyFingerprintsComplete:     false,
+		KeyHintNormalization:        channel.APIKeyHintNormalization,
+		UnavailableKeyHintIDs:       []int64{},
 		UnavailableAPIKeyIDs:        []int64{},
 		Groups:                      make([]externalGroupRate, 0, len(snapshots)),
 	}
@@ -260,6 +268,9 @@ func buildExternalChannelRates(ctx context.Context, d *Deps, ch *storage.Channel
 	data.KeySyncAttemptedAt = fingerprints.AttemptedAt
 	data.KeySyncStatus = fingerprints.SyncStatus
 	data.KeySyncError = fingerprints.SyncError
+	data.KeyHintsComplete = fingerprints.HintsComplete && filter.GroupName == "" && filter.GroupID == 0
+	data.UnavailableKeyHintIDs = fingerprints.UnavailableHintKeyIDs
+	emittedKeyIDs := make(map[int64]struct{}, len(fingerprints.Keys))
 	for _, snap := range snapshots {
 		if filter.OnlyWithKeys && !fingerprints.Groups.ContainsSnapshot(snap) {
 			continue
@@ -273,7 +284,11 @@ func buildExternalChannelRates(ctx context.Context, d *Deps, ch *storage.Channel
 		keys := make([]externalAPIKeyFingerprint, 0)
 		for _, key := range fingerprints.Keys {
 			if key.ContainsSnapshot(snap) {
-				keys = append(keys, externalAPIKeyFingerprint{APIKeyID: key.APIKeyID, Fingerprint: key.Fingerprint})
+				keys = append(keys, externalAPIKeyFingerprint{
+					APIKeyID: key.APIKeyID, Fingerprint: key.Fingerprint,
+					MaskedKey: key.MaskedKey, KeyPrefix: key.KeyPrefix, KeySuffix: key.KeySuffix,
+				})
+				emittedKeyIDs[key.APIKeyID] = struct{}{}
 			}
 		}
 		data.Groups = append(data.Groups, externalGroupRate{
@@ -284,6 +299,10 @@ func buildExternalChannelRates(ctx context.Context, d *Deps, ch *storage.Channel
 			UpdatedAt:   snap.LastSeenAt,
 			APIKeys:     keys,
 		})
+	}
+	// 缺少分组倍率或绑定时，不能把不完整的返回范围宣称为唯一性判断的全集。
+	if len(emittedKeyIDs) != len(fingerprints.Keys) {
+		data.KeyHintsComplete = false
 	}
 	return data, nil
 }

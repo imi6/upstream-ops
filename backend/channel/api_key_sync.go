@@ -59,6 +59,10 @@ func (s *Service) SyncAPIKeySnapshots(ctx context.Context, channelID uint, force
 	if err != nil {
 		return fail(err)
 	}
+	// 分组筛选仍可使用已有列表；快照不能丢掉无效或重复 ID 后宣称候选完整。
+	if set.keyListInvalid {
+		return fail(errors.New("密钥同步失败：上游返回无效或重复密钥 ID"))
+	}
 	pending := make([]int, 0, len(set.maskedKeys))
 	for i := range set.maskedKeys {
 		candidate := &set.maskedKeys[i]
@@ -68,6 +72,7 @@ func (s *Service) SyncAPIKeySnapshots(ctx context.Context, channelID uint, force
 			var digest [32]byte
 			copy(digest[:], decoded)
 			set.rememberAPIKey(digest, candidate.binding)
+			set.keyHints[candidate.binding.APIKeyID] = reuseAPIKeyMatchHint(old, set.keyHints[candidate.binding.APIKeyID])
 			continue
 		}
 		pending = append(pending, i)
@@ -81,6 +86,9 @@ func (s *Service) SyncAPIKeySnapshots(ctx context.Context, channelID uint, force
 				value, revealErr := conn.RevealAPIKey(ctx, resolved, session, candidate.binding.APIKeyID)
 				if revealErr == nil {
 					full = normalizeFingerprintAPIKey(set.channelType, value)
+					if full != "" && !maskedAPIKey(full) {
+						set.keyHints[candidate.binding.APIKeyID] = newAPIKeyMatchHint(value)
+					}
 				}
 			}
 			if full != "" && !maskedAPIKey(full) {
@@ -96,6 +104,7 @@ func (s *Service) SyncAPIKeySnapshots(ctx context.Context, channelID uint, force
 				var fingerprint [32]byte
 				copy(fingerprint[:], decoded)
 				set.rememberAPIKey(fingerprint, candidate.binding)
+				set.keyHints[candidate.binding.APIKeyID] = reuseAPIKeyMatchHint(old, set.keyHints[candidate.binding.APIKeyID])
 			}
 		}
 	}
@@ -119,6 +128,8 @@ func (s *Service) SyncAPIKeySnapshots(ctx context.Context, channelID uint, force
 			ChannelID: channelID, APIKeyID: id, GroupID: binding.GroupID, GroupName: binding.GroupName,
 			Fingerprint: fingerprint, FingerprintNormalization: APIKeyFingerprintNormalization(set.channelType),
 			KeyHintHash: set.keyHintHashes[id], FingerprintStale: unavailable, LastSeenAt: at,
+			MaskedKey: set.keyHints[id].maskedKey, KeyPrefix: set.keyHints[id].prefix, KeySuffix: set.keyHints[id].suffix,
+			KeyHintVersion: apiKeyHintVersion,
 		})
 	}
 	summary := ""
@@ -165,6 +176,10 @@ func (s *Service) persistAPIKeyMutation(ctx context.Context, source *storage.Cha
 		value := normalizeFingerprintAPIKey(source.Type, key.Key)
 		if value != "" {
 			hint := apiKeyHintHash(source.Type, key.Key)
+			matchHint := newAPIKeyMatchHint(key.Key)
+			if reusableAPIKeyFingerprint(*row, source.Type, hint) {
+				matchHint = reuseAPIKeyMatchHint(*row, matchHint)
+			}
 			if !maskedAPIKey(value) {
 				row.Fingerprint = hint
 				row.FingerprintStale = false
@@ -173,6 +188,8 @@ func (s *Service) persistAPIKeyMutation(ctx context.Context, source *storage.Cha
 				row.FingerprintStale = true
 			}
 			row.KeyHintHash = hint
+			row.MaskedKey, row.KeyPrefix, row.KeySuffix = matchHint.maskedKey, matchHint.prefix, matchHint.suffix
+			row.KeyHintVersion = apiKeyHintVersion
 		}
 		row.FingerprintNormalization = APIKeyFingerprintNormalization(source.Type)
 		if (row.GroupID == nil || *row.GroupID <= 0) && row.GroupName == "" {

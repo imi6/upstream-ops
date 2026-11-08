@@ -13,7 +13,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// ChannelAPIKeySnapshot 只保存分组关系与摘要，不保存完整密钥或打码密钥。
+// ChannelAPIKeySnapshot 只保存分组关系、摘要与受限的脱敏提示，不保存完整密钥。
 type ChannelAPIKeySnapshot struct {
 	ChannelID                uint      `gorm:"primaryKey;autoIncrement:false"`
 	APIKeyID                 int64     `gorm:"primaryKey;autoIncrement:false"`
@@ -22,6 +22,10 @@ type ChannelAPIKeySnapshot struct {
 	Fingerprint              string    `gorm:"size:64"`
 	FingerprintNormalization string    `gorm:"size:32"`
 	KeyHintHash              string    `gorm:"size:64"`
+	MaskedKey                string    `gorm:"size:32"`
+	KeyPrefix                string    `gorm:"size:3"`
+	KeySuffix                string    `gorm:"size:4"`
+	KeyHintVersion           int       `gorm:"not null;default:0"`
 	FingerprintStale         bool      `gorm:"not null;default:false"`
 	LastSeenAt               time.Time `gorm:"not null"`
 }

@@ -26,6 +26,9 @@ type apiKeyGroupCandidate struct {
 type APIKeyFingerprint struct {
 	APIKeyID    int64
 	Fingerprint string
+	MaskedKey   string
+	KeyPrefix   string
+	KeySuffix   string
 	GroupID     *int64
 	GroupName   string
 }
@@ -38,14 +41,17 @@ func (f APIKeyFingerprint) ContainsSnapshot(snap storage.RateSnapshot) bool {
 }
 
 type APIKeyFingerprintExport struct {
-	ChannelSource     string
-	Keys              []APIKeyFingerprint
-	UnavailableKeyIDs []int64
-	Groups            *APIKeyGroupSet
-	SyncedAt          *time.Time
-	AttemptedAt       *time.Time
-	SyncStatus        string
-	SyncError         string
+	ChannelSource         string
+	Keys                  []APIKeyFingerprint
+	UnavailableKeyIDs     []int64
+	UnavailableHintKeyIDs []int64
+	HintsSynced           bool
+	HintsComplete         bool
+	Groups                *APIKeyGroupSet
+	SyncedAt              *time.Time
+	AttemptedAt           *time.Time
+	SyncStatus            string
+	SyncError             string
 }
 
 // APIKeyFingerprintNormalization 声明外部系统计算 SHA-256 指纹前应采用的规则。
@@ -65,7 +71,67 @@ func normalizeFingerprintAPIKey(channelType storage.ChannelType, key string) str
 }
 
 func maskedAPIKey(key string) bool {
-	return strings.ContainsAny(key, "*…") || strings.Contains(key, "...")
+	return strings.ContainsAny(key, "*…•●") || strings.Contains(key, "...")
+}
+
+// APIKeyHintNormalization 只用于可见前后缀，独立于各上游的精确指纹规则。
+const APIKeyHintNormalization = "trim_strip_sk_prefix"
+
+const apiKeyHintVersion = 1
+
+type apiKeyMatchHint struct {
+	maskedKey string
+	prefix    string
+	suffix    string
+}
+
+// newAPIKeyMatchHint 不透传上游字符串：最多保留正文前 3 位和后 4 位。
+// 对脱敏值只采信遮罩两端；过短的完整 Key 不生成提示，避免暴露大部分内容。
+func newAPIKeyMatchHint(key string) apiKeyMatchHint {
+	key = strings.TrimSpace(key)
+	hasSKPrefix := strings.HasPrefix(key, "sk-")
+	key = strings.TrimPrefix(key, "sk-")
+	first, last := -1, -1
+	for _, marker := range []string{"...", "*", "…", "•", "●"} {
+		if start := strings.Index(key, marker); start >= 0 && (first < 0 || start < first) {
+			first = start
+		}
+		if end := strings.LastIndex(key, marker); end >= 0 && end+len(marker) > last {
+			last = end + len(marker)
+		}
+	}
+	var prefix, suffix []rune
+	if first >= 0 {
+		prefix, suffix = []rune(key[:first]), []rune(key[last:])
+	} else {
+		value := []rune(key)
+		if len(value) < 16 {
+			return apiKeyMatchHint{}
+		}
+		prefix, suffix = value, value
+	}
+	if len(prefix) > 3 {
+		prefix = prefix[:3]
+	}
+	if len(suffix) > 4 {
+		suffix = suffix[len(suffix)-4:]
+	}
+	hint := apiKeyMatchHint{prefix: string(prefix), suffix: string(suffix)}
+	if hint.prefix != "" || hint.suffix != "" {
+		hint.maskedKey = hint.prefix + "..." + hint.suffix
+		if hasSKPrefix {
+			hint.maskedKey = "sk-" + hint.maskedKey
+		}
+	}
+	return hint
+}
+
+// reuseAPIKeyMatchHint 仅在调用方已确认密钥未变时，保留旧快照中更完整的可见部分。
+func reuseAPIKeyMatchHint(old storage.ChannelAPIKeySnapshot, current apiKeyMatchHint) apiKeyMatchHint {
+	if old.KeyHintVersion == apiKeyHintVersion && strings.HasPrefix(old.KeyPrefix, current.prefix) && strings.HasSuffix(old.KeySuffix, current.suffix) {
+		return apiKeyMatchHint{maskedKey: old.MaskedKey, prefix: old.KeyPrefix, suffix: old.KeySuffix}
+	}
+	return current
 }
 
 func (s *APIKeyGroupSet) unavailableAPIKey(id int64) {
@@ -90,8 +156,12 @@ func (s *APIKeyGroupSet) rememberAPIKey(fingerprint [32]byte, binding apiKeyGrou
 
 func (s *APIKeyGroupSet) indexAPIKey(key connector.APIKey) {
 	if key.ID <= 0 {
+		s.keyListInvalid = true
 		s.unavailableAPIKey(key.ID)
 		return
+	}
+	if _, exists := s.bindings[key.ID]; exists {
+		s.keyListInvalid = true
 	}
 	binding := apiKeyGroupBinding{
 		APIKeyID:  key.ID,
@@ -103,6 +173,7 @@ func (s *APIKeyGroupSet) indexAPIKey(key connector.APIKey) {
 	}
 	s.bindings[key.ID] = binding
 	s.keyHintHashes[key.ID] = apiKeyHintHash(s.channelType, key.Key)
+	s.keyHints[key.ID] = newAPIKeyMatchHint(key.Key)
 	if (binding.GroupID == nil || *binding.GroupID <= 0) && binding.GroupName == "" {
 		s.unavailableAPIKey(key.ID)
 		return
@@ -127,8 +198,9 @@ func (s *Service) ExportAPIKeyFingerprints(ctx context.Context, channelID uint) 
 	result := &APIKeyFingerprintExport{
 		ChannelSource: state.ChannelSource,
 		Keys:          []APIKeyFingerprint{}, UnavailableKeyIDs: []int64{},
-		Groups:   &APIKeyGroupSet{IDs: map[int64]struct{}{}, Names: map[string]struct{}{}},
-		SyncedAt: state.SyncedAt, AttemptedAt: state.AttemptedAt,
+		UnavailableHintKeyIDs: []int64{},
+		Groups:                &APIKeyGroupSet{IDs: map[int64]struct{}{}, Names: map[string]struct{}{}},
+		SyncedAt:              state.SyncedAt, AttemptedAt: state.AttemptedAt,
 		SyncStatus: "ready", SyncError: state.SyncError,
 	}
 	if state.SyncedAt == nil {
@@ -142,6 +214,8 @@ func (s *Service) ExportAPIKeyFingerprints(ctx context.Context, channelID uint) 
 			result.SyncStatus = "failed"
 		}
 	}
+	result.HintsSynced = state.SyncedAt != nil
+	result.HintsComplete = state.SyncedAt != nil && result.SyncStatus != "failed"
 	counts := make(map[string]int, len(state.Keys))
 	for _, key := range state.Keys {
 		if key.Fingerprint != "" {
@@ -158,9 +232,21 @@ func (s *Service) ExportAPIKeyFingerprints(ctx context.Context, channelID uint) 
 		if key.Fingerprint == "" || key.FingerprintStale || counts[key.Fingerprint] > 1 {
 			result.UnavailableKeyIDs = append(result.UnavailableKeyIDs, key.APIKeyID)
 		}
+		exported := APIKeyFingerprint{APIKeyID: key.APIKeyID, GroupID: key.GroupID, GroupName: key.GroupName}
 		if key.Fingerprint != "" && counts[key.Fingerprint] == 1 {
-			result.Keys = append(result.Keys, APIKeyFingerprint{APIKeyID: key.APIKeyID, Fingerprint: key.Fingerprint, GroupID: key.GroupID, GroupName: key.GroupName})
+			exported.Fingerprint = key.Fingerprint
 		}
+		if key.KeyHintVersion != apiKeyHintVersion {
+			result.HintsSynced = false
+		} else {
+			exported.MaskedKey, exported.KeyPrefix, exported.KeySuffix = key.MaskedKey, key.KeyPrefix, key.KeySuffix
+		}
+		if len([]rune(exported.KeySuffix)) != 4 {
+			result.UnavailableHintKeyIDs = append(result.UnavailableHintKeyIDs, key.APIKeyID)
+			result.HintsComplete = false
+		}
+		// 即使没有完整指纹也保留候选，避免兜底时漏掉可能发生冲突的 Key。
+		result.Keys = append(result.Keys, exported)
 	}
 	if len(result.UnavailableKeyIDs) > 0 && result.SyncStatus == "ready" {
 		result.SyncStatus = "partial"

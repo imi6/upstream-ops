@@ -1348,6 +1348,8 @@ type APIKeyGroupSet struct {
 	unavailableKeyIDs map[int64]struct{}
 	bindings          map[int64]apiKeyGroupBinding
 	keyHintHashes     map[int64]string
+	keyHints          map[int64]apiKeyMatchHint
+	keyListInvalid    bool
 }
 
 // ContainsGroupID 判断 Sub2API 分组 ID 是否在集合内。
@@ -1425,6 +1427,7 @@ func (s *Service) listAPIKeyGroupSet(ctx context.Context, channelID uint) (*APIK
 		keyFingerprints: make(map[[32]byte]apiKeyGroupBinding),
 		bindings:        make(map[int64]apiKeyGroupBinding),
 		keyHintHashes:   make(map[int64]string),
+		keyHints:        make(map[int64]apiKeyMatchHint),
 	}
 	isSub2API := c.Type == storage.ChannelTypeSub2API
 

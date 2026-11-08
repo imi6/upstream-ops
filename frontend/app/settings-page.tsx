@@ -446,7 +446,7 @@ export default function SettingsPage() {
               <SectionCard
                 icon={<KeyRound className="size-4 text-violet-600" />}
                 title="外部分组倍率 API"
-                description="向 NewAPI 下发本地持久化的分组倍率和 Key 指纹，普通请求不访问上游；保存并应用后生效。"
+                description="向 NewAPI 下发本地持久化的分组倍率、Key 指纹与脱敏提示，普通请求不访问上游；保存并应用后生效。"
               >
                 <InlineSwitch
                   id="external-api-enabled"
@@ -546,11 +546,11 @@ export default function SettingsPage() {
                     </span>
                     <span className="mt-2 block">
                       由 NewAPI 后端携带 Authorization: Bearer &lt;令牌&gt; 调用，令牌不能放入浏览器。
-                      一次拉取允许渠道的分组、倍率和 api_keys 指纹，NewAPI 无需上传自己的渠道 Key。
+                      一次拉取允许渠道的分组、倍率、api_keys 指纹与脱敏前后缀，NewAPI 无需上传自己的渠道 Key。
                     </span>
                     <span className="mt-2 block">
                       普通请求只查本地数据库，缺少快照时也不会自动回源。
-                      密钥分组与指纹存入独立的 channel_api_key_snapshots 表，不保存完整 Key。
+                      密钥分组、指纹与脱敏提示存入独立的 channel_api_key_snapshots 表，不保存完整 Key。
                       启用后启动时补齐未同步数据，之后随“倍率扫描 Cron”后台更新允许的渠道。
                     </span>
                     <span className="mt-2 block break-all">
@@ -564,6 +564,12 @@ export default function SettingsPage() {
                       结合 site_url 与 groups[].api_keys[].fingerprint 匹配所属分组，再读取 ratio。
                     </span>
                     <span className="mt-2 block">
+                      指纹未命中时，可在同一上游站点的完整候选范围内用 key_prefix 和 key_suffix 兜底。
+                      key_hint_normalization 固定为 trim_strip_sk_prefix，已知前后缀必须同时一致；仅有尾号时才只比尾号。
+                      需要相关渠道的 key_hints_complete 全为 true，且候选唯一；多候选或候选不完整时不能自动选。
+                      脱敏提示最多保留正文前 3 位和后 4 位，兜底结果应标明“近似匹配”。
+                    </span>
+                    <span className="mt-2 block">
                       分组仅遵循本节的独立筛选开关；渠道卡片和通知开关不会影响下发范围。
                       返回最近一次采集的倍率及 updated_at，密钥同步时间见 key_synced_at。
                       key_sync_status 为 ready、not_synced、partial 或 failed，分别表示已同步、尚未同步、部分可用或上次同步失败。
@@ -571,7 +577,7 @@ export default function SettingsPage() {
                       同步失败保留旧数据，应标记旧数据状态，避免将未匹配结果当成默认倍率。
                     </span>
                     <span className="mt-2 block">
-                      仅下发指纹，不下发完整 Key。后台同步时，上游返回打码 Key 才在内部读取完整值计算摘要；
+                      下发指纹与受限的脱敏提示，不下发完整 Key。后台同步时，上游返回打码 Key 才在内部读取完整值计算摘要；
                       已有且未变更的指纹会复用，强制刷新时重新读取。不可用或未能更新的指纹通过 unavailable_api_key_ids 标记。
                     </span>
                     <span className="mt-2 block">

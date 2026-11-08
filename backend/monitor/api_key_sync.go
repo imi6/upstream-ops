@@ -25,7 +25,7 @@ func (s *Service) SyncExternalAPIKeys(ctx context.Context, onlyMissing bool) {
 	s.forEachChannel(ctx, list, "api_keys", func(chCtx context.Context, ch *storage.Channel, _ int) {
 		if onlyMissing {
 			state, err := s.channelSvc.ExportAPIKeyFingerprints(chCtx, ch.ID)
-			if err == nil && state.SyncStatus == "ready" {
+			if err == nil && state.SyncStatus == "ready" && state.HintsSynced {
 				return
 			}
 		}
