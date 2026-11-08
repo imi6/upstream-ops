@@ -29,6 +29,7 @@ type Manager struct {
 	scheduler        *scheduler.Scheduler
 	proxyConfig      config.ProxyConfig
 	upstreamConfig   config.UpstreamConfig
+	externalAPI      config.ExternalAPIConfig
 }
 
 type ApplyResult struct {
@@ -86,6 +87,21 @@ func (m *Manager) CurrentUpstream() config.UpstreamConfig {
 	return m.upstreamConfig
 }
 
+func (m *Manager) CurrentExternalAPI() config.ExternalAPIConfig {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	cfg := m.externalAPI
+	cfg.ChannelIDs = append([]uint{}, cfg.ChannelIDs...)
+	return cfg
+}
+
+func (m *Manager) UpdateExternalAPI(cfg config.ExternalAPIConfig) {
+	cfg.ChannelIDs = append([]uint{}, cfg.ChannelIDs...)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.externalAPI = cfg
+}
+
 func (m *Manager) AuthMiddleware() gin.HandlerFunc {
 	whitelist := map[string]struct{}{
 		"/healthz":        {},
@@ -124,6 +140,13 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	externalAPI, err := config.ExternalAPIWithEnv(cfg.ExternalAPI)
+	if err != nil {
+		return nil, err
+	}
+	if err := externalAPI.Validate(); err != nil {
+		return nil, err
+	}
 
 	authSvc, err := buildAuth(cfg.Auth, secret)
 	if err != nil {
@@ -158,13 +181,14 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 	m.scheduler = newScheduler
 	m.proxyConfig = cfg.Proxy
 	m.upstreamConfig = cfg.Upstream.WithDefaults()
+	m.externalAPI = externalAPI
 	m.mu.Unlock()
 
 	if oldScheduler != nil {
 		oldScheduler.Stop()
 	}
 
-	sections := []string{"app", "auth", "scheduler", "notifications", "retention", "proxy", "upstream"}
+	sections := []string{"app", "auth", "externalAPI", "scheduler", "notifications", "retention", "proxy", "upstream"}
 	if m.log != nil {
 		m.log.Info("runtime config applied",
 			"sections", sections,
@@ -174,7 +198,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 
 	return &ApplyResult{
 		AppliedSections: sections,
-		Message:         "app、auth、scheduler、notifications、retention、proxy、upstream 已立即生效",
+		Message:         "app、auth、externalAPI、scheduler、notifications、retention、proxy、upstream 已立即生效",
 	}, nil
 }
 

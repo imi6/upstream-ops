@@ -306,5 +306,6 @@ export function useCaptchaConfigs(enabled = true) {
 }
 
 export function useSystemConfig() {
-  return useApi<SystemConfigResponse>("/settings/config")
+  // 配置表单只在保存或应用后手动刷新，防止全局轮询覆盖未保存的设置和新令牌。
+  return useApi<SystemConfigResponse>("/settings/config", false)
 }

@@ -18,6 +18,7 @@ type Config struct {
 	Database      DatabaseConfig      `mapstructure:"database" yaml:"database" json:"database"`
 	Security      SecurityConfig      `mapstructure:"security" yaml:"security" json:"security"`
 	Auth          AuthConfig          `mapstructure:"auth" yaml:"auth" json:"auth"`
+	ExternalAPI   ExternalAPIConfig   `mapstructure:"externalAPI" yaml:"externalAPI" json:"externalAPI"`
 	Scheduler     SchedulerConfig     `mapstructure:"scheduler" yaml:"scheduler" json:"scheduler"`
 	Notifications NotificationsConfig `mapstructure:"notifications" yaml:"notifications" json:"notifications"`
 	Proxy         ProxyConfig         `mapstructure:"proxy" yaml:"proxy" json:"proxy"`
@@ -70,7 +71,8 @@ type SecurityConfig struct {
 
 // AuthConfig 后台单用户登录配置。
 //
-// Enabled = false（默认）时整套鉴权被关掉：/api/* 全部免 token，前端检测后跳过登录页。
+// Enabled = false（默认）时后台管理 API 免 token，前端检测后跳过登录页。
+// 外部只读 API 始终使用自己的独立令牌，不受此开关影响。
 // 适合纯内网 / 反代后面的部署。需要公网暴露时必须显式 Enabled=true 并设强密码。
 //
 // Enabled=true 时 Username/Password 是写死的管理员凭据，TokenSecret 用于签发 HMAC token。
@@ -238,6 +240,16 @@ func load(path string, withEnv bool) (*Config, string, error) {
 		return nil, "", fmt.Errorf("unmarshal config: %w", err)
 	}
 	cfg.Upstream = cfg.Upstream.WithDefaults()
+	if withEnv {
+		externalAPI, err := ExternalAPIWithEnv(cfg.ExternalAPI)
+		if err != nil {
+			return nil, "", err
+		}
+		if err := externalAPI.Validate(); err != nil {
+			return nil, "", err
+		}
+		cfg.ExternalAPI = externalAPI
+	}
 	return cfg, v.ConfigFileUsed(), nil
 }
 
@@ -316,6 +328,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("auth.enabled", false)
 	v.SetDefault("auth.username", "admin")
 	v.SetDefault("auth.sessionTTLHours", 168) // 7 天
+	v.SetDefault("externalAPI.enabled", false)
+	v.SetDefault("externalAPI.token", "")
+	v.SetDefault("externalAPI.channelIDs", []uint{})
+	v.SetDefault("externalAPI.onlyCreatedKeyGroups", false)
 
 	// 通知去抖：不过滤涨跌幅、balance_low 1h 内不重复、失败重试 3 次。
 	// 全渠道倍率变化始终在一次扫描结束后合并发送。
@@ -335,7 +351,6 @@ func setDefaults(v *viper.Viper) {
 
 	v.SetDefault("upstream.timeoutSeconds", DefaultUpstreamTimeoutSeconds)
 	v.SetDefault("upstream.userAgent", DefaultUpstreamUserAgent)
-
 
 	v.SetDefault("log.level", "info")
 	v.SetDefault("log.format", "text")

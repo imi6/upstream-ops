@@ -59,7 +59,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Auth：默认禁用（AUTH_ENABLED=false），所有 /api/* 免 token；
+	// Auth：默认禁用（AUTH_ENABLED=false），后台管理 API 免 token；外部只读 API 单独鉴权。
 	// 显式开启时账号/密码必填，token secret 缺省回退到 AppSecret。
 	var authSvc *auth.Service
 	if cfg.Auth.Enabled {
@@ -79,7 +79,7 @@ func main() {
 		}
 		log.Info("auth enabled", "username", cfg.Auth.Username)
 	} else {
-		log.Warn("auth disabled — all /api/* endpoints are open; set AUTH_ENABLED=true for production exposure")
+		log.Warn("auth disabled — management API endpoints are open; set AUTH_ENABLED=true for production exposure")
 	}
 
 	db, err := storage.Open(cfg.Database.ToStorageConfig())
@@ -139,6 +139,7 @@ func main() {
 		cfg.Upstream,
 		schedulerFactory,
 	)
+	runtimeMgr.UpdateExternalAPI(cfg.ExternalAPI)
 
 	gin.SetMode(cfg.Server.Mode)
 	router := gin.New()

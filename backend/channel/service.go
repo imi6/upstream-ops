@@ -44,6 +44,8 @@ type Service struct {
 	// 该集合需要分页拉取上游全部密钥计算，monitor 每次刷新和前端切页都会用到，
 	// 缓存以 channelID 为 key（TTL 见 apiKeyGroupSetTTL）。
 	apiKeyGroupSetCache sync.Map
+	// 按渠道串行化密钥变更与分组集合读取，避免并发重复拉取或回写旧缓存。
+	apiKeyGroupSetLocks sync.Map
 }
 
 func NewService(
@@ -147,27 +149,27 @@ type Sub2APITokenCredential struct {
 //   - password: Password 必填；Username 为登录账号
 //   - token:    TokenCredential 必填（已序列化为 JSON 字符串）；Username 仅作展示备注
 type CreateInput struct {
-	Name                   string
-	Type                   storage.ChannelType
-	SiteURL                string
-	Username               string
-	SortOrder              int
-	Password               string
-	CredentialMode         storage.CredentialMode
-	TokenCredential        string // JSON：password 模式时为空
-	LoginExtraParams       string
-	TurnstileEnabled       bool
-	IgnoreAnnouncements    bool
-	SubscriptionEnabled    bool
-	ProxyEnabled           bool
-	CaptchaConfigID        *uint
-	BalanceThreshold       float64
-	RechargeMultiplier     *float64
-	RechargeMultiplierMode string
-	MonitorEnabled         bool
+	Name                        string
+	Type                        storage.ChannelType
+	SiteURL                     string
+	Username                    string
+	SortOrder                   int
+	Password                    string
+	CredentialMode              storage.CredentialMode
+	TokenCredential             string // JSON：password 模式时为空
+	LoginExtraParams            string
+	TurnstileEnabled            bool
+	IgnoreAnnouncements         bool
+	SubscriptionEnabled         bool
+	ProxyEnabled                bool
+	CaptchaConfigID             *uint
+	BalanceThreshold            float64
+	RechargeMultiplier          *float64
+	RechargeMultiplierMode      string
+	MonitorEnabled              bool
 	OnlyCreatedKeyGroupsEnabled bool
-	Tags                   []string
-	Notes                  string
+	Tags                        []string
+	Notes                       string
 }
 
 func (s *Service) Create(in CreateInput) (*storage.Channel, error) {
@@ -192,26 +194,26 @@ func (s *Service) Create(in CreateInput) (*storage.Channel, error) {
 		return nil, fmt.Errorf("encrypt credential: %w", err)
 	}
 	c := &storage.Channel{
-		Name:                   in.Name,
-		Type:                   in.Type,
-		SiteURL:                in.SiteURL,
-		Username:               in.Username,
-		SortOrder:              normalizeSortOrder(in.SortOrder),
-		PasswordCipher:         enc,
-		CredentialMode:         mode,
-		LoginExtraParams:       loginExtraParams,
-		TurnstileEnabled:       in.TurnstileEnabled && mode == storage.CredentialModePassword, // token 模式不需要打码
-		IgnoreAnnouncements:    in.IgnoreAnnouncements,
-		SubscriptionEnabled:    in.SubscriptionEnabled,
-		ProxyEnabled:           in.ProxyEnabled,
-		CaptchaConfigID:        in.CaptchaConfigID,
-		BalanceThreshold:       in.BalanceThreshold,
-		RechargeMultiplier:     normalizeRechargeMultiplier(in.RechargeMultiplier),
-		RechargeMultiplierMode: connector.NormalizeRechargeMultiplierMode(in.RechargeMultiplierMode),
-		MonitorEnabled:         in.MonitorEnabled,
+		Name:                        in.Name,
+		Type:                        in.Type,
+		SiteURL:                     in.SiteURL,
+		Username:                    in.Username,
+		SortOrder:                   normalizeSortOrder(in.SortOrder),
+		PasswordCipher:              enc,
+		CredentialMode:              mode,
+		LoginExtraParams:            loginExtraParams,
+		TurnstileEnabled:            in.TurnstileEnabled && mode == storage.CredentialModePassword, // token 模式不需要打码
+		IgnoreAnnouncements:         in.IgnoreAnnouncements,
+		SubscriptionEnabled:         in.SubscriptionEnabled,
+		ProxyEnabled:                in.ProxyEnabled,
+		CaptchaConfigID:             in.CaptchaConfigID,
+		BalanceThreshold:            in.BalanceThreshold,
+		RechargeMultiplier:          normalizeRechargeMultiplier(in.RechargeMultiplier),
+		RechargeMultiplierMode:      connector.NormalizeRechargeMultiplierMode(in.RechargeMultiplierMode),
+		MonitorEnabled:              in.MonitorEnabled,
 		OnlyCreatedKeyGroupsEnabled: in.OnlyCreatedKeyGroupsEnabled,
-		Tags:                   storage.NormalizeChannelTags(in.Tags),
-		Notes:                  strings.TrimSpace(in.Notes),
+		Tags:                        storage.NormalizeChannelTags(in.Tags),
+		Notes:                       strings.TrimSpace(in.Notes),
 	}
 	if mode == storage.CredentialModeToken {
 		// token 模式不依赖打码 provider
@@ -225,26 +227,26 @@ func (s *Service) Create(in CreateInput) (*storage.Channel, error) {
 
 // UpdateInput 编辑渠道的可选字段。Password / TokenCredential 为空表示不修改凭据。
 type UpdateInput struct {
-	Name                   *string
-	SiteURL                *string
-	Username               *string
-	SortOrder              *int
-	Password               *string
-	CredentialMode         *storage.CredentialMode
-	TokenCredential        *string // JSON
-	LoginExtraParams       *string
-	TurnstileEnabled       *bool
-	IgnoreAnnouncements    *bool
-	SubscriptionEnabled    *bool
-	ProxyEnabled           *bool
-	CaptchaConfigID        *uint
-	BalanceThreshold       *float64
-	RechargeMultiplier     *float64
-	RechargeMultiplierMode *string
-	MonitorEnabled         *bool
+	Name                        *string
+	SiteURL                     *string
+	Username                    *string
+	SortOrder                   *int
+	Password                    *string
+	CredentialMode              *storage.CredentialMode
+	TokenCredential             *string // JSON
+	LoginExtraParams            *string
+	TurnstileEnabled            *bool
+	IgnoreAnnouncements         *bool
+	SubscriptionEnabled         *bool
+	ProxyEnabled                *bool
+	CaptchaConfigID             *uint
+	BalanceThreshold            *float64
+	RechargeMultiplier          *float64
+	RechargeMultiplierMode      *string
+	MonitorEnabled              *bool
 	OnlyCreatedKeyGroupsEnabled *bool
-	Tags                   *[]string // nil 表示不修改；空切片表示清空
-	Notes                  *string
+	Tags                        *[]string // nil 表示不修改；空切片表示清空
+	Notes                       *string
 }
 
 func (s *Service) Update(id uint, in UpdateInput) (*storage.Channel, error) {
@@ -1158,6 +1160,11 @@ func (s *Service) ListAPIKeyGroups(ctx context.Context, channelID uint) ([]conne
 }
 
 func (s *Service) CreateAPIKey(ctx context.Context, channelID uint, req connector.APIKeyCreateRequest) (*connector.APIKey, error) {
+	unlock, err := s.lockAPIKeyGroups(ctx, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	c, resolved, conn, session, err := s.prepareConnectorCall(ctx, channelID)
 	if err != nil {
 		return nil, err
@@ -1166,11 +1173,17 @@ func (s *Service) CreateAPIKey(ctx context.Context, channelID uint, req connecto
 	if err != nil {
 		return nil, err
 	}
+	s.apiKeyGroupSetCache.Delete(channelID)
 	_ = s.Channels.SetLastError(c.ID, "")
 	return key, nil
 }
 
 func (s *Service) UpdateAPIKey(ctx context.Context, channelID uint, keyID int64, req connector.APIKeyUpdateRequest) (*connector.APIKey, error) {
+	unlock, err := s.lockAPIKeyGroups(ctx, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
 	c, resolved, conn, session, err := s.prepareConnectorCall(ctx, channelID)
 	if err != nil {
 		return nil, err
@@ -1179,11 +1192,17 @@ func (s *Service) UpdateAPIKey(ctx context.Context, channelID uint, keyID int64,
 	if err != nil {
 		return nil, err
 	}
+	s.apiKeyGroupSetCache.Delete(channelID)
 	_ = s.Channels.SetLastError(c.ID, "")
 	return key, nil
 }
 
 func (s *Service) DeleteAPIKey(ctx context.Context, channelID uint, keyID int64) error {
+	unlock, err := s.lockAPIKeyGroups(ctx, channelID)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	c, resolved, conn, session, err := s.prepareConnectorCall(ctx, channelID)
 	if err != nil {
 		return err
@@ -1191,6 +1210,7 @@ func (s *Service) DeleteAPIKey(ctx context.Context, channelID uint, keyID int64)
 	if err := conn.DeleteAPIKey(ctx, resolved, session, keyID); err != nil {
 		return err
 	}
+	s.apiKeyGroupSetCache.Delete(channelID)
 	_ = s.Channels.SetLastError(c.ID, "")
 	return nil
 }
@@ -1250,6 +1270,12 @@ const maxAPIKeyListPages = 100
 type APIKeyGroupSet struct {
 	IDs   map[int64]struct{}
 	Names map[string]struct{}
+
+	// 密钥匹配索引仅在服务内部使用，不保留完整密钥。
+	channelType       storage.ChannelType
+	keyFingerprints   map[[32]byte]apiKeyGroupBinding
+	maskedKeys        []apiKeyGroupCandidate
+	unavailableKeyIDs map[int64]struct{}
 }
 
 // ContainsGroupID 判断 Sub2API 分组 ID 是否在集合内。
@@ -1283,7 +1309,7 @@ func (s *APIKeyGroupSet) ContainsSnapshot(snap storage.RateSnapshot) bool {
 	return s.ContainsGroupName(snap.ModelName)
 }
 
-// Empty 返回集合是否为空（即没拉到任何密钥）。调用方据此可决定是否禁用过滤以避免误伤。
+// Empty 返回集合是否为空；启用筛选时，空集合应当对应空分组列表。
 func (s *APIKeyGroupSet) Empty() bool {
 	return s == nil || (len(s.IDs) == 0 && len(s.Names) == 0)
 }
@@ -1301,6 +1327,16 @@ type apiKeyGroupSetCacheEntry struct {
 // 内置 30s TTL 内存缓存（sync.Map），避免 monitor 每分钟扫描 + 前端切页都打上游。
 // 分页循环有安全上限 maxAPIKeyListPages 以防 pages 异常导致死循环。
 func (s *Service) ListAPIKeyGroupSet(ctx context.Context, channelID uint) (*APIKeyGroupSet, error) {
+	unlock, err := s.lockAPIKeyGroups(ctx, channelID)
+	if err != nil {
+		return nil, err
+	}
+	defer unlock()
+	return s.listAPIKeyGroupSet(ctx, channelID)
+}
+
+// listAPIKeyGroupSet 由已持有渠道密钥锁的调用方使用。
+func (s *Service) listAPIKeyGroupSet(ctx context.Context, channelID uint) (*APIKeyGroupSet, error) {
 	if cached, ok := s.loadAPIKeyGroupSetCache(channelID); ok {
 		return cached, nil
 	}
@@ -1311,18 +1347,27 @@ func (s *Service) ListAPIKeyGroupSet(ctx context.Context, channelID uint) (*APIK
 	}
 
 	set := &APIKeyGroupSet{
-		IDs:   make(map[int64]struct{}),
-		Names: make(map[string]struct{}),
+		IDs:             make(map[int64]struct{}),
+		Names:           make(map[string]struct{}),
+		channelType:     c.Type,
+		keyFingerprints: make(map[[32]byte]apiKeyGroupBinding),
 	}
 	isSub2API := c.Type == storage.ChannelTypeSub2API
 
 	const pageSize = 100
 	for page := 1; page <= maxAPIKeyListPages; page++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		p, err := conn.ListAPIKeys(ctx, resolved, session, connector.APIKeyQuery{Page: page, PageSize: pageSize})
 		if err != nil {
 			return nil, err
 		}
+		if p == nil || (p.Page > 0 && p.Page != page) {
+			return nil, fmt.Errorf("读取密钥分组失败：上游返回的分页信息无效")
+		}
 		for _, k := range p.Items {
+			set.indexAPIKey(k)
 			if isSub2API {
 				if k.GroupID != nil && *k.GroupID > 0 {
 					set.IDs[*k.GroupID] = struct{}{}
@@ -1333,13 +1378,37 @@ func (s *Service) ListAPIKeyGroupSet(ctx context.Context, channelID uint) (*APIK
 				set.Names[name] = struct{}{}
 			}
 		}
-		if p.Pages <= 0 || page >= p.Pages {
+		effectivePageSize := p.PageSize
+		if effectivePageSize <= 0 {
+			effectivePageSize = pageSize
+		}
+		hasMore := p.Pages > page || p.Total > int64(page)*int64(effectivePageSize)
+		// 兼容未返回 total/pages 的上游：满页时继续请求下一页。
+		if p.Total <= 0 && len(p.Items) >= effectivePageSize {
+			hasMore = true
+		}
+		if !hasMore {
 			break
+		}
+		if len(p.Items) == 0 || page == maxAPIKeyListPages {
+			return nil, fmt.Errorf("读取密钥分组失败：分页不完整或超过 %d 页上限", maxAPIKeyListPages)
 		}
 	}
 	_ = s.Channels.SetLastError(c.ID, "")
 	s.storeAPIKeyGroupSetCache(channelID, set)
 	return set, nil
+}
+
+// lockAPIKeyGroups 支持请求取消，避免等待其他分页请求时超出接口截止时间。
+func (s *Service) lockAPIKeyGroups(ctx context.Context, channelID uint) (func(), error) {
+	value, _ := s.apiKeyGroupSetLocks.LoadOrStore(channelID, make(chan struct{}, 1))
+	lock := value.(chan struct{})
+	select {
+	case lock <- struct{}{}:
+		return func() { <-lock }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 }
 
 // loadAPIKeyGroupSetCache 读缓存；过期或未命中返回 (nil, false)。

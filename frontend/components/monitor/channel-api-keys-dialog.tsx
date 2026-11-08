@@ -35,6 +35,7 @@ import {
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { apiFetch } from "@/lib/api"
+import { useTriggerRefresh } from "@/lib/refresh-context"
 import { copyText as copyToClipboard } from "@/lib/clipboard"
 import { channelTypeLabel, dateTime, decimal, formatRatio } from "@/lib/format"
 import type {
@@ -250,6 +251,7 @@ export function ChannelAPIKeysDialog({
   initialAction,
 }: ChannelAPIKeysDialogProps) {
   const { confirm, dialog: confirmDialog } = useConfirm()
+  const refresh = useTriggerRefresh()
   const [mode, setMode] = useState<Mode>("list")
   const [editing, setEditing] = useState<ChannelAPIKey | null>(null)
   const [form, setForm] = useState<KeyForm>(emptyForm)
@@ -491,6 +493,7 @@ export function ChannelAPIKeysDialog({
       setForm(emptyForm)
       setPage(1)
       reload()
+      refresh()
     } catch (e) {
       const err = e as Error
       setError(err.message || "保存密钥失败")
@@ -524,6 +527,7 @@ export function ChannelAPIKeysDialog({
         body: JSON.stringify(payload),
       })
       toast.success(`API Key「${selectedKey.name || selectedKey.id}」已从「${sourceGroup}」迁移到「${liveTargetGroup.name}」`)
+      refresh()
       onOpenChange(false)
     } catch (e) {
       const err = e as Error
@@ -582,6 +586,7 @@ export function ChannelAPIKeysDialog({
       await apiFetch(`/channels/${channel.id}/api-keys/${key.id}`, { method: "DELETE" })
       toast.success("密钥已删除")
       reload()
+      refresh()
     } catch (e) {
       const err = e as Error
       toast.error(err.message || "删除密钥失败")

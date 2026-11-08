@@ -338,12 +338,13 @@ func (s *Service) refreshRates(ctx context.Context, c *storage.Channel, batch *n
 
 	// "仅显示已创建密钥的分组"开关：开关开启时只派发"已挂密钥的分组"的 added/removed/changes
 	// 通知；RateSnapshot 本地存储仍按全量维护，确保网关 / 通知设置等可继续读全分组。
-	// 拉 set 失败时不做过滤（保险：避免上游密钥接口抖动导致通知被全静音），仅日志告警。
+	// 无法确认密钥归属时跳过分组通知，避免开启筛选后仍发送全部分组。
 	var keyGroupSet *channel.APIKeyGroupSet
 	if c.OnlyCreatedKeyGroupsEnabled {
+		keyGroupSet = &channel.APIKeyGroupSet{}
 		set, setErr := s.channelSvc.ListAPIKeyGroupSet(ctx, c.ID)
 		if setErr != nil {
-			s.log.Warn("list api key group set failed; skip dispatch filtering",
+			s.log.Warn("list api key group set failed; skip group notifications",
 				"channel", c.Name, "err", setErr)
 		} else if set.Empty() {
 			// 渠道没有密钥 → 任何 added / changes / removed 都不应通知。

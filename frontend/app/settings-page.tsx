@@ -32,6 +32,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { CaptchaFormDialog } from "@/components/monitor/captcha-form-dialog";
 import { NotificationFormDialog } from "@/components/monitor/notification-form-dialog";
 import { apiFetch } from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import { useTriggerRefresh } from "@/lib/refresh-context";
 import type {
   AppVersion,
@@ -44,6 +45,7 @@ import type {
 import { decimal, money, relativeTime } from "@/lib/format";
 import {
   useCaptchaConfigs,
+  useChannels,
   useNotificationLogs,
   useNotificationChannels,
   useAppVersion,
@@ -65,6 +67,7 @@ interface ProxyTestResult {
 
 export default function SettingsPage() {
   const query = useSystemConfig();
+  const channels = useChannels();
   const notifications = useNotificationChannels();
   const captchas = useCaptchaConfigs();
   const notificationLogs = useNotificationLogs(1, 10);
@@ -72,6 +75,8 @@ export default function SettingsPage() {
   const refresh = useTriggerRefresh();
   const { confirm, dialog: confirmDialog } = useConfirm();
   const [form, setForm] = useState<SystemConfig | null>(null);
+  const [externalAPIToken, setExternalAPIToken] = useState("");
+  const [externalChannelIDs, setExternalChannelIDs] = useState("");
   const [saving, setSaving] = useState(false);
   const [applying, setApplying] = useState(false);
   const [configSavedPendingApply, setConfigSavedPendingApply] = useState(false);
@@ -93,7 +98,17 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (query.data?.config) {
-      setForm(query.data.config);
+      const externalAPI = {
+        ...(query.data.config.externalAPI ?? {
+          enabled: false,
+          tokenConfigured: false,
+          channelIDs: [],
+        }),
+        onlyCreatedKeyGroups: query.data.config.externalAPI?.onlyCreatedKeyGroups ?? false,
+      };
+      setForm({ ...query.data.config, externalAPI });
+      setExternalChannelIDs(externalAPI.channelIDs.join(", "));
+      setExternalAPIToken("");
     }
   }, [query.data]);
 
@@ -206,11 +221,39 @@ export default function SettingsPage() {
   }
 
   async function handleSave() {
+    if (!form) return;
+    const parts = externalChannelIDs.trim()
+      ? externalChannelIDs.trim().split(/[,，\s]+/)
+      : [];
+    if (
+      parts.some((part) =>
+        !/^\d+$/.test(part) || !Number.isSafeInteger(Number(part)) || Number(part) <= 0,
+      )
+    ) {
+      toast.error("外部 API 渠道 ID 必须是逗号分隔的正整数");
+      return;
+    }
+    const token = externalAPIToken.trim();
+    if (
+      form.externalAPI.enabled &&
+      ((token && token.length < 32) || (!token && !form.externalAPI.tokenConfigured))
+    ) {
+      toast.error("请为外部 API 配置至少 32 个字符的独立访问令牌");
+      return;
+    }
     setSaving(true);
     try {
       await apiFetch("/settings/config", {
         method: "PUT",
-        body: JSON.stringify(form),
+        body: JSON.stringify({
+          ...form,
+          externalAPI: {
+            enabled: form.externalAPI.enabled,
+            onlyCreatedKeyGroups: form.externalAPI.onlyCreatedKeyGroups,
+            channelIDs: [...new Set(parts.map(Number))],
+            token,
+          },
+        }),
       });
       toast.success("已写入配置文件");
       setConfigSavedPendingApply(true);
@@ -397,6 +440,134 @@ export default function SettingsPage() {
                       }
                     />
                   </Field>
+                </div>
+              </SectionCard>
+
+              <SectionCard
+                icon={<KeyRound className="size-4 text-violet-600" />}
+                title="外部分组倍率 API"
+                description="向 NewAPI 下发渠道、分组倍率和 Key 指纹，供 NewAPI 在本地匹配；保存并应用后生效。"
+              >
+                <InlineSwitch
+                  id="external-api-enabled"
+                  label="启用外部只读 API"
+                  description="使用独立 Bearer 令牌，仅允许读取分组倍率。"
+                  checked={form.externalAPI.enabled}
+                  onCheckedChange={(checked) =>
+                    setForm((prev) =>
+                      prev
+                        ? { ...prev, externalAPI: { ...prev.externalAPI, enabled: checked } }
+                        : prev,
+                    )
+                  }
+                />
+                <div className="mt-4">
+                  <InlineSwitch
+                    id="external-api-only-created-key-groups"
+                    label="仅此接口：仅显示已创建密钥的分组"
+                    description="独立控制外部 API；开启后分组列表只返回有密钥的分组，不改变渠道卡片、分组对话框或通知的筛选设置。"
+                    checked={form.externalAPI.onlyCreatedKeyGroups}
+                    onCheckedChange={(checked) =>
+                      setForm((prev) =>
+                        prev
+                          ? { ...prev, externalAPI: { ...prev.externalAPI, onlyCreatedKeyGroups: checked } }
+                          : prev,
+                      )
+                    }
+                  />
+                </div>
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <Field
+                    label="独立访问令牌"
+                    description={form.externalAPI.tokenConfigured
+                      ? "已配置，留空保留；输入新令牌可轮换。生成后请先复制并妥善保存。"
+                      : "至少 32 个字符，生成后请先复制并妥善保存；保存后不再回显。"}
+                  >
+                    <Input
+                      type="password"
+                      autoComplete="new-password"
+                      maxLength={4096}
+                      value={externalAPIToken}
+                      onChange={(e) => setExternalAPIToken(e.target.value)}
+                      placeholder={form.externalAPI.tokenConfigured ? "留空保留现有令牌" : "输入或生成独立访问令牌"}
+                    />
+                    <div className="mt-2 flex gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const bytes = crypto.getRandomValues(new Uint8Array(32));
+                          setExternalAPIToken(
+                            Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join(""),
+                          );
+                        }}
+                      >
+                        生成令牌
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        disabled={!externalAPIToken}
+                        onClick={() => {
+                          void copyText(externalAPIToken)
+                            .then(() => toast.success("访问令牌已复制"))
+                            .catch((err: Error) => toast.error(err.message));
+                        }}
+                      >
+                        复制令牌
+                      </Button>
+                    </div>
+                  </Field>
+                  <Field
+                    label="允许读取的渠道 ID"
+                    description="逗号分隔，例如 1, 3；留空允许全部渠道。下方列出渠道名称与 ID。"
+                  >
+                    <Input
+                      value={externalChannelIDs}
+                      onChange={(e) => setExternalChannelIDs(e.target.value)}
+                      placeholder="例如 1, 3"
+                    />
+                    <div className="max-h-24 overflow-y-auto text-xs leading-6 text-muted-foreground">
+                      {channels.data?.map((channel) => (
+                        <span key={channel.id} className="mr-3 inline-block">
+                          {channel.name}（ID: {channel.id}）
+                        </span>
+                      ))}
+                      {channels.error ? "渠道列表加载失败，可手动填写渠道 ID。" : null}
+                    </div>
+                  </Field>
+                </div>
+                <div className="mt-4">
+                  <NoteBox title="NewAPI 本地匹配方式">
+                    <span className="block break-all font-mono text-xs">
+                      GET /api/external/v1/channel-rates
+                    </span>
+                    <span className="mt-2 block">
+                      由 NewAPI 后端携带 Authorization: Bearer &lt;令牌&gt; 调用，令牌不能放入浏览器。
+                      一次拉取允许渠道的分组、倍率和 api_keys 指纹，NewAPI 无需上传自己的渠道 Key。
+                    </span>
+                    <span className="mt-2 block break-all">
+                      NewAPI 在本地按 key_fingerprint_normalization 归一化已有渠道 Key：
+                      trim 表示去除首尾空白；trim_strip_sk_prefix 表示再去掉一个开头的 sk-。
+                      对归一化结果的 UTF-8 字节计算 SHA-256 小写十六进制指纹，
+                      结合 site_url 与 groups[].api_keys[].fingerprint 匹配所属分组，再读取 ratio。
+                    </span>
+                    <span className="mt-2 block">
+                      分组仅遵循本节的独立筛选开关；渠道卡片和通知开关不会影响下发范围。
+                      返回最近一次成功采集的倍率和 updated_at，建议 NewAPI 缓存 30～60 秒。
+                      complete=false 或 key_fingerprints_complete=false 表示部分渠道或密钥暂不可用，
+                      应标记旧数据状态，避免将未匹配结果当成默认倍率。
+                    </span>
+                    <span className="mt-2 block">
+                      仅下发指纹，不下发完整 Key。上游返回打码 Key 时，UpstreamOps 会在内部读取完整值计算摘要；
+                      读取失败会通过 unavailable_api_key_ids 标记，不能仅凭尾号匹配。
+                    </span>
+                    <span className="mt-2 block">
+                      EXTERNAL_API_* 环境变量优先于本页配置，调整环境变量后需重新创建容器。
+                    </span>
+                  </NoteBox>
                 </div>
               </SectionCard>
 

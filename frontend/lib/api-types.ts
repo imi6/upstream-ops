@@ -294,9 +294,17 @@ export interface SystemUpstreamConfig {
   userAgent: string
 }
 
+export interface SystemExternalAPIConfig {
+  enabled: boolean
+  tokenConfigured: boolean
+  channelIDs: number[]
+  onlyCreatedKeyGroups: boolean
+}
+
 export interface SystemConfig {
   app: AppConfig
   auth: SystemAuthConfig
+  externalAPI: SystemExternalAPIConfig
   scheduler: SystemSchedulerConfig
   notifications: SystemNotificationsConfig
   proxy: SystemProxyConfig

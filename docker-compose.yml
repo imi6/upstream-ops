@@ -18,6 +18,12 @@ services:
       ADMIN_USERNAME: admin
       ADMIN_PASSWORD: ""
       AUTH_TOKEN_SECRET: ""
+      # 外部分组倍率接口默认关闭，可在系统设置中生成独立令牌并启用。
+      # 也可取消下方注释使用环境变量；非空环境变量优先于页面配置。
+      # EXTERNAL_API_ENABLED: "true"
+      # EXTERNAL_API_TOKEN: "" # 必填：至少 32 个字符的独立随机令牌
+      # EXTERNAL_API_CHANNEL_IDS: "1,3"
+      # EXTERNAL_API_ONLY_CREATED_KEY_GROUPS: "true" # 仅筛选外部接口的分组列表
     ports:
       - "8080:8418"
     volumes:
