@@ -30,6 +30,8 @@ type Scheduler struct {
 	captchas      *storage.Captchas
 	cipher        *crypto.Cipher
 	proxy         config.ProxyConfig
+	startupCancel context.CancelFunc
+	startupDone   chan struct{}
 }
 
 // New 构造调度器。
@@ -46,8 +48,8 @@ func New(
 	log *slog.Logger,
 ) *Scheduler {
 	return &Scheduler{
-		cfg:           cfg,
-		log:           log,
+		cfg: cfg,
+		log: log,
 		// Recover 避免单个任务 panic 拖垮调度器；SkipIfStillRunning 在上一轮还没跑完时
 		// 跳过本轮，防止扫描任务叠加。
 		cron: cron.New(
@@ -90,6 +92,13 @@ func (s *Scheduler) Start() error {
 	// 配置热重载会新建 Scheduler 并 Start，所以这里下发即可覆盖新配置。
 	if s.monitor != nil {
 		s.monitor.SetConcurrency(s.cfg.Concurrency)
+		ctx, cancel := context.WithCancel(context.Background())
+		s.startupCancel = cancel
+		s.startupDone = make(chan struct{})
+		go func() {
+			defer close(s.startupDone)
+			s.monitor.SyncExternalAPIKeys(ctx, true)
+		}()
 	}
 	s.log.Info("scheduler started",
 		"balanceCron", s.cfg.BalanceCron,
@@ -102,8 +111,14 @@ func (s *Scheduler) Start() error {
 
 // Stop 停止调度器。
 func (s *Scheduler) Stop() {
+	if s.startupCancel != nil {
+		s.startupCancel()
+	}
 	if s.cron != nil {
 		<-s.cron.Stop().Done()
+	}
+	if s.startupDone != nil {
+		<-s.startupDone
 	}
 }
 
@@ -124,6 +139,7 @@ func (s *Scheduler) runBalance() {
 func (s *Scheduler) runRates() {
 	if s.monitor != nil {
 		s.monitor.ScanAllRates(context.Background())
+		s.monitor.SyncExternalAPIKeys(context.Background(), false)
 	}
 }
 

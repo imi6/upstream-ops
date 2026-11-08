@@ -28,16 +28,18 @@ const tokenSessionTTL = 365 * 24 * time.Hour
 
 // Service 渠道领域服务。
 type Service struct {
-	Channels     *storage.Channels
-	AuthSessions *storage.AuthSessions
-	Captchas     *storage.Captchas
-	Rates        *storage.Rates
-	MonitorLogs  *storage.MonitorLogs
-	Cipher       *crypto.Cipher
+	Channels        *storage.Channels
+	AuthSessions    *storage.AuthSessions
+	Captchas        *storage.Captchas
+	Rates           *storage.Rates
+	MonitorLogs     *storage.MonitorLogs
+	Cipher          *crypto.Cipher
+	APIKeySnapshots *storage.APIKeySnapshots
 
 	mu          sync.RWMutex
 	proxyConfig config.ProxyConfig
 	upstream    config.UpstreamConfig
+	externalAPI config.ExternalAPIConfig
 	locks       sync.Map
 
 	// apiKeyGroupSetCache 缓存"已创建密钥的分组集合"。
@@ -56,7 +58,7 @@ func NewService(
 	monitorLogs *storage.MonitorLogs,
 	cipher *crypto.Cipher,
 ) *Service {
-	return &Service{
+	s := &Service{
 		Channels:     channels,
 		AuthSessions: authSessions,
 		Captchas:     captchas,
@@ -64,6 +66,38 @@ func NewService(
 		MonitorLogs:  monitorLogs,
 		Cipher:       cipher,
 	}
+	if channels != nil {
+		s.APIKeySnapshots = channels.APIKeySnapshots()
+	}
+	return s
+}
+
+func (s *Service) UpdateExternalAPIConfig(cfg config.ExternalAPIConfig) {
+	cfg.ChannelIDs = append([]uint{}, cfg.ChannelIDs...)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.externalAPI = cfg
+}
+
+// APIKeySyncChannels 仅后台同步已启用外部 API 授权的渠道，包含暂停监控的渠道。
+func (s *Service) APIKeySyncChannels() ([]storage.Channel, error) {
+	s.mu.RLock()
+	cfg := s.externalAPI
+	s.mu.RUnlock()
+	if !cfg.Enabled {
+		return nil, nil
+	}
+	channels, err := s.Channels.List()
+	if err != nil {
+		return nil, err
+	}
+	allowed := make([]storage.Channel, 0, len(channels))
+	for _, ch := range channels {
+		if cfg.AllowsChannel(ch.ID) {
+			allowed = append(allowed, ch)
+		}
+	}
+	return allowed, nil
 }
 
 func (s *Service) UpdateProxyConfig(cfg config.ProxyConfig) {
@@ -254,6 +288,7 @@ func (s *Service) Update(id uint, in UpdateInput) (*storage.Channel, error) {
 	if err != nil {
 		return nil, err
 	}
+	previousSite, previousUsername := c.SiteURL, c.Username
 	if in.Name != nil {
 		c.Name = *in.Name
 	}
@@ -306,6 +341,8 @@ func (s *Service) Update(id uint, in UpdateInput) (*storage.Channel, error) {
 			return nil, fmt.Errorf("encrypt credential: %w", err)
 		}
 		c.PasswordCipher = enc
+		// 用户主动更换凭据时使旧快照失效；自动续期登录令牌不改变账号版本。
+		c.APIKeyCredentialRevision++
 		c.CredentialMode = finalMode
 		// 凭据或模式变了，强制下次重新构造 session
 		_ = s.AuthSessions.Delete(c.ID)
@@ -367,9 +404,13 @@ func (s *Service) Update(id uint, in UpdateInput) (*storage.Channel, error) {
 	if in.Notes != nil {
 		c.Notes = strings.TrimSpace(*in.Notes)
 	}
+	if c.SiteURL != previousSite || c.Username != previousUsername {
+		_ = s.AuthSessions.Delete(c.ID)
+	}
 	if err := s.Channels.Update(c); err != nil {
 		return nil, err
 	}
+	s.apiKeyGroupSetCache.Delete(id)
 	return c, nil
 }
 
@@ -475,6 +516,7 @@ func validateCredential(channelType storage.ChannelType, mode storage.Credential
 }
 
 func (s *Service) Delete(id uint) error {
+	s.apiKeyGroupSetCache.Delete(id)
 	_ = s.AuthSessions.Delete(id)
 	return s.Channels.Delete(id)
 }
@@ -493,6 +535,7 @@ func (s *Service) ClearLoginInfo(id uint) (*storage.Channel, error) {
 	}
 	if c.CredentialMode == storage.CredentialModeToken {
 		c.PasswordCipher = ""
+		c.APIKeyCredentialRevision++
 		c.LastError = ""
 		if err := s.Channels.Update(c); err != nil {
 			return nil, err
@@ -1174,6 +1217,19 @@ func (s *Service) CreateAPIKey(ctx context.Context, channelID uint, req connecto
 		return nil, err
 	}
 	s.apiKeyGroupSetCache.Delete(channelID)
+	if key != nil {
+		copy := *key
+		if copy.Key == "" {
+			copy.Key = req.CustomKey
+		}
+		if copy.Group == "" && copy.GroupName == "" {
+			copy.Group = req.Group
+		}
+		if copy.GroupID == nil {
+			copy.GroupID = req.GroupID
+		}
+		s.persistAPIKeyMutation(ctx, c, &copy, 0)
+	}
 	_ = s.Channels.SetLastError(c.ID, "")
 	return key, nil
 }
@@ -1193,6 +1249,19 @@ func (s *Service) UpdateAPIKey(ctx context.Context, channelID uint, keyID int64,
 		return nil, err
 	}
 	s.apiKeyGroupSetCache.Delete(channelID)
+	copy := connector.APIKey{ID: keyID}
+	if key != nil {
+		copy = *key
+		copy.ID = keyID
+	}
+	if req.Group != nil {
+		copy.Group = *req.Group
+		copy.GroupName = *req.Group
+	}
+	if req.GroupID != nil {
+		copy.GroupID = req.GroupID
+	}
+	s.persistAPIKeyMutation(ctx, c, &copy, 0)
 	_ = s.Channels.SetLastError(c.ID, "")
 	return key, nil
 }
@@ -1211,6 +1280,7 @@ func (s *Service) DeleteAPIKey(ctx context.Context, channelID uint, keyID int64)
 		return err
 	}
 	s.apiKeyGroupSetCache.Delete(channelID)
+	s.persistAPIKeyMutation(ctx, c, nil, keyID)
 	_ = s.Channels.SetLastError(c.ID, "")
 	return nil
 }
@@ -1276,6 +1346,8 @@ type APIKeyGroupSet struct {
 	keyFingerprints   map[[32]byte]apiKeyGroupBinding
 	maskedKeys        []apiKeyGroupCandidate
 	unavailableKeyIDs map[int64]struct{}
+	bindings          map[int64]apiKeyGroupBinding
+	keyHintHashes     map[int64]string
 }
 
 // ContainsGroupID 判断 Sub2API 分组 ID 是否在集合内。
@@ -1351,6 +1423,8 @@ func (s *Service) listAPIKeyGroupSet(ctx context.Context, channelID uint) (*APIK
 		Names:           make(map[string]struct{}),
 		channelType:     c.Type,
 		keyFingerprints: make(map[[32]byte]apiKeyGroupBinding),
+		bindings:        make(map[int64]apiKeyGroupBinding),
+		keyHintHashes:   make(map[int64]string),
 	}
 	isSub2API := c.Type == storage.ChannelTypeSub2API
 

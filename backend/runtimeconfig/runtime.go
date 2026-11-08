@@ -170,6 +170,7 @@ func (m *Manager) ApplyFromFile() (*ApplyResult, error) {
 	if channelSvc != nil {
 		channelSvc.UpdateProxyConfig(cfg.Proxy)
 		channelSvc.UpdateUpstreamConfig(cfg.Upstream)
+		channelSvc.UpdateExternalAPIConfig(externalAPI)
 	}
 	newScheduler := factory(cfg.Scheduler, cfg.Proxy)
 	if err := newScheduler.Start(); err != nil {

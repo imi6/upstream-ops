@@ -128,6 +128,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&AuthSession{},
 		&CaptchaConfig{},
 		&RateSnapshot{},
+		&ChannelAPIKeySnapshot{},
 		&RateChangeLog{},
 		&UpstreamAnnouncement{},
 		&BalanceSnapshot{},

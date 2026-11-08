@@ -446,12 +446,12 @@ export default function SettingsPage() {
               <SectionCard
                 icon={<KeyRound className="size-4 text-violet-600" />}
                 title="外部分组倍率 API"
-                description="向 NewAPI 下发渠道、分组倍率和 Key 指纹，供 NewAPI 在本地匹配；保存并应用后生效。"
+                description="向 NewAPI 下发本地持久化的分组倍率和 Key 指纹，普通请求不访问上游；保存并应用后生效。"
               >
                 <InlineSwitch
                   id="external-api-enabled"
                   label="启用外部只读 API"
-                  description="使用独立 Bearer 令牌，仅允许读取分组倍率。"
+                  description="使用独立 Bearer 令牌读取快照；显式传入 force_refresh=1 时才即时回源刷新。"
                   checked={form.externalAPI.enabled}
                   onCheckedChange={(checked) =>
                     setForm((prev) =>
@@ -548,6 +548,15 @@ export default function SettingsPage() {
                       由 NewAPI 后端携带 Authorization: Bearer &lt;令牌&gt; 调用，令牌不能放入浏览器。
                       一次拉取允许渠道的分组、倍率和 api_keys 指纹，NewAPI 无需上传自己的渠道 Key。
                     </span>
+                    <span className="mt-2 block">
+                      普通请求只查本地数据库，缺少快照时也不会自动回源。
+                      密钥分组与指纹存入独立的 channel_api_key_snapshots 表，不保存完整 Key。
+                      启用后启动时补齐未同步数据，之后随“倍率扫描 Cron”后台更新允许的渠道。
+                    </span>
+                    <span className="mt-2 block break-all">
+                      需要立即更新时，调用 GET /api/external/v1/channels/渠道ID/group-rates?force_refresh=1，
+                      同时刷新该渠道的倍率和密钥快照。批量接口也支持此参数，建议优先按渠道强刷并预留请求超时。
+                    </span>
                     <span className="mt-2 block break-all">
                       NewAPI 在本地按 key_fingerprint_normalization 归一化已有渠道 Key：
                       trim 表示去除首尾空白；trim_strip_sk_prefix 表示再去掉一个开头的 sk-。
@@ -556,13 +565,14 @@ export default function SettingsPage() {
                     </span>
                     <span className="mt-2 block">
                       分组仅遵循本节的独立筛选开关；渠道卡片和通知开关不会影响下发范围。
-                      返回最近一次成功采集的倍率和 updated_at，建议 NewAPI 缓存 30～60 秒。
+                      返回最近一次采集的倍率及 updated_at，密钥同步时间见 key_synced_at。
+                      key_sync_status 为 ready、not_synced、partial 或 failed，分别表示已同步、尚未同步、部分可用或上次同步失败。
                       complete=false 或 key_fingerprints_complete=false 表示部分渠道或密钥暂不可用，
-                      应标记旧数据状态，避免将未匹配结果当成默认倍率。
+                      同步失败保留旧数据，应标记旧数据状态，避免将未匹配结果当成默认倍率。
                     </span>
                     <span className="mt-2 block">
-                      仅下发指纹，不下发完整 Key。上游返回打码 Key 时，UpstreamOps 会在内部读取完整值计算摘要；
-                      读取失败会通过 unavailable_api_key_ids 标记，不能仅凭尾号匹配。
+                      仅下发指纹，不下发完整 Key。后台同步时，上游返回打码 Key 才在内部读取完整值计算摘要；
+                      已有且未变更的指纹会复用，强制刷新时重新读取。不可用或未能更新的指纹通过 unavailable_api_key_ids 标记。
                     </span>
                     <span className="mt-2 block">
                       EXTERNAL_API_* 环境变量优先于本页配置，调整环境变量后需重新创建容器。

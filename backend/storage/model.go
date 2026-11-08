@@ -73,6 +73,14 @@ type Channel struct {
 	TotalCost     *float64   `json:"total_cost,omitempty"`
 	LastError     string     `gorm:"type:text" json:"last_error,omitempty"`
 
+	// 外部 API 的密钥快照同步状态；密钥分组及指纹单独保存在 channel_api_key_snapshots。
+	APIKeySnapshotSource     string     `gorm:"size:64" json:"-"`
+	APIKeyCredentialRevision uint64     `gorm:"not null;default:0" json:"-"`
+	APIKeySyncedAt           *time.Time `json:"-"`
+	APIKeySyncAttemptedAt    *time.Time `json:"-"`
+	APIKeySyncComplete       bool       `gorm:"not null;default:false" json:"-"`
+	APIKeySyncError          string     `gorm:"type:text" json:"-"`
+
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -254,19 +262,19 @@ func (NotificationChannel) TableName() string { return "notification_channels" }
 type NotificationEvent string
 
 const (
-	EventBalanceLow                     NotificationEvent = "balance_low"
-	EventRateChanged                    NotificationEvent = "rate_changed"
-	EventRateStructureChanged           NotificationEvent = "rate_structure_changed"
-	EventRateAdded                      NotificationEvent = "rate_added"
-	EventRateRemoved                    NotificationEvent = "rate_removed"
-	EventAnnouncement                   NotificationEvent = "announcement"
-	EventLoginFailed                    NotificationEvent = "login_failed"
-	EventCaptchaFailed                  NotificationEvent = "captcha_failed"
-	EventMonitorFailed                  NotificationEvent = "monitor_failed"
-	EventSubscriptionDailyLow           NotificationEvent = "subscription_daily_remaining_low"
-	EventSubscriptionWeeklyLow          NotificationEvent = "subscription_weekly_remaining_low"
-	EventSubscriptionMonthlyLow         NotificationEvent = "subscription_monthly_remaining_low"
-	EventSubscriptionExpiring           NotificationEvent = "subscription_expiring"
+	EventBalanceLow             NotificationEvent = "balance_low"
+	EventRateChanged            NotificationEvent = "rate_changed"
+	EventRateStructureChanged   NotificationEvent = "rate_structure_changed"
+	EventRateAdded              NotificationEvent = "rate_added"
+	EventRateRemoved            NotificationEvent = "rate_removed"
+	EventAnnouncement           NotificationEvent = "announcement"
+	EventLoginFailed            NotificationEvent = "login_failed"
+	EventCaptchaFailed          NotificationEvent = "captcha_failed"
+	EventMonitorFailed          NotificationEvent = "monitor_failed"
+	EventSubscriptionDailyLow   NotificationEvent = "subscription_daily_remaining_low"
+	EventSubscriptionWeeklyLow  NotificationEvent = "subscription_weekly_remaining_low"
+	EventSubscriptionMonthlyLow NotificationEvent = "subscription_monthly_remaining_low"
+	EventSubscriptionExpiring   NotificationEvent = "subscription_expiring"
 )
 
 // NotificationLog 通知发送记录。

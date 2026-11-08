@@ -4,8 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"sort"
+	"errors"
 	"strings"
+	"time"
 
 	"github.com/bejix/upstream-ops/backend/connector"
 	"github.com/bejix/upstream-ops/backend/storage"
@@ -18,8 +19,7 @@ type apiKeyGroupBinding struct {
 }
 
 type apiKeyGroupCandidate struct {
-	binding  apiKeyGroupBinding
-	resolved bool
+	binding apiKeyGroupBinding
 }
 
 // APIKeyFingerprint 用于外部系统在本地匹配其已有的渠道 Key，不携带密钥原文。
@@ -38,8 +38,14 @@ func (f APIKeyFingerprint) ContainsSnapshot(snap storage.RateSnapshot) bool {
 }
 
 type APIKeyFingerprintExport struct {
+	ChannelSource     string
 	Keys              []APIKeyFingerprint
 	UnavailableKeyIDs []int64
+	Groups            *APIKeyGroupSet
+	SyncedAt          *time.Time
+	AttemptedAt       *time.Time
+	SyncStatus        string
+	SyncError         string
 }
 
 // APIKeyFingerprintNormalization 声明外部系统计算 SHA-256 指纹前应采用的规则。
@@ -95,6 +101,8 @@ func (s *APIKeyGroupSet) indexAPIKey(key connector.APIKey) {
 	if s.channelType == storage.ChannelTypeSub2API || binding.GroupName == "" {
 		binding.GroupName = strings.TrimSpace(key.GroupName)
 	}
+	s.bindings[key.ID] = binding
+	s.keyHintHashes[key.ID] = apiKeyHintHash(s.channelType, key.Key)
 	if (binding.GroupID == nil || *binding.GroupID <= 0) && binding.GroupName == "" {
 		s.unavailableAPIKey(key.ID)
 		return
@@ -107,74 +115,64 @@ func (s *APIKeyGroupSet) indexAPIKey(key connector.APIKey) {
 	s.maskedKeys = append(s.maskedKeys, apiKeyGroupCandidate{binding: binding})
 }
 
-// ExportAPIKeyFingerprints 仅导出指纹与分组绑定，不接收外部 Key。
-// 上游只返回打码值时，在本服务内读取完整值计算摘要；缓存不保留完整密钥。
-// 单条密钥读取失败不应丢弃其他可用绑定，响应中显式标记未导出的密钥 ID。
+// ExportAPIKeyFingerprints 仅导出已持久化的快照，普通外部请求绝不访问上游。
 func (s *Service) ExportAPIKeyFingerprints(ctx context.Context, channelID uint) (*APIKeyFingerprintExport, error) {
-	unlock, err := s.lockAPIKeyGroups(ctx, channelID)
+	if s.APIKeySnapshots == nil {
+		return nil, errors.New("密钥快照存储不可用")
+	}
+	state, err := s.APIKeySnapshots.Load(ctx, channelID)
 	if err != nil {
 		return nil, err
-	}
-	defer unlock()
-	set, err := s.listAPIKeyGroupSet(ctx, channelID)
-	if err != nil {
-		return nil, err
-	}
-	pending := make([]int, 0)
-	for i, candidate := range set.maskedKeys {
-		if !candidate.resolved {
-			pending = append(pending, i)
-		}
-	}
-	if len(pending) > 0 {
-		_, resolved, conn, session, prepareErr := s.prepareConnectorCall(ctx, channelID)
-		if prepareErr == nil {
-			for _, i := range pending {
-				if ctx.Err() != nil {
-					break
-				}
-				candidate := &set.maskedKeys[i]
-				full, err := conn.RevealAPIKey(ctx, resolved, session, candidate.binding.APIKeyID)
-				if err != nil {
-					continue
-				}
-				full = normalizeFingerprintAPIKey(set.channelType, full)
-				if full == "" || maskedAPIKey(full) {
-					continue
-				}
-				set.rememberAPIKey(sha256.Sum256([]byte(full)), candidate.binding)
-				candidate.resolved = true
-			}
-		}
-	}
-	unavailable := make(map[int64]struct{}, len(set.unavailableKeyIDs))
-	for id := range set.unavailableKeyIDs {
-		unavailable[id] = struct{}{}
-	}
-	for _, candidate := range set.maskedKeys {
-		if !candidate.resolved {
-			unavailable[candidate.binding.APIKeyID] = struct{}{}
-		}
 	}
 	result := &APIKeyFingerprintExport{
-		Keys:              make([]APIKeyFingerprint, 0, len(set.keyFingerprints)),
-		UnavailableKeyIDs: make([]int64, 0, len(unavailable)),
+		ChannelSource: state.ChannelSource,
+		Keys:          []APIKeyFingerprint{}, UnavailableKeyIDs: []int64{},
+		Groups:   &APIKeyGroupSet{IDs: map[int64]struct{}{}, Names: map[string]struct{}{}},
+		SyncedAt: state.SyncedAt, AttemptedAt: state.AttemptedAt,
+		SyncStatus: "ready", SyncError: state.SyncError,
 	}
-	for fingerprint, binding := range set.keyFingerprints {
-		if binding.APIKeyID <= 0 {
-			continue
+	if state.SyncedAt == nil {
+		result.SyncStatus = "not_synced"
+		if state.SyncError != "" {
+			result.SyncStatus = "failed"
 		}
-		result.Keys = append(result.Keys, APIKeyFingerprint{
-			APIKeyID:    binding.APIKeyID,
-			Fingerprint: hex.EncodeToString(fingerprint[:]),
-			GroupID:     binding.GroupID,
-			GroupName:   binding.GroupName,
-		})
+	} else if !state.Complete {
+		result.SyncStatus = "partial"
+		if state.AttemptedAt != nil && state.AttemptedAt.After(*state.SyncedAt) {
+			result.SyncStatus = "failed"
+		}
 	}
-	for id := range unavailable {
-		result.UnavailableKeyIDs = append(result.UnavailableKeyIDs, id)
+	counts := make(map[string]int, len(state.Keys))
+	for _, key := range state.Keys {
+		if key.Fingerprint != "" {
+			counts[key.Fingerprint]++
+		}
 	}
-	sort.Slice(result.Keys, func(i, j int) bool { return result.Keys[i].APIKeyID < result.Keys[j].APIKeyID })
-	sort.Slice(result.UnavailableKeyIDs, func(i, j int) bool { return result.UnavailableKeyIDs[i] < result.UnavailableKeyIDs[j] })
+	for _, key := range state.Keys {
+		if key.GroupID != nil && *key.GroupID > 0 {
+			result.Groups.IDs[*key.GroupID] = struct{}{}
+		}
+		if key.GroupName != "" {
+			result.Groups.Names[key.GroupName] = struct{}{}
+		}
+		if key.Fingerprint == "" || key.FingerprintStale || counts[key.Fingerprint] > 1 {
+			result.UnavailableKeyIDs = append(result.UnavailableKeyIDs, key.APIKeyID)
+		}
+		if key.Fingerprint != "" && counts[key.Fingerprint] == 1 {
+			result.Keys = append(result.Keys, APIKeyFingerprint{APIKeyID: key.APIKeyID, Fingerprint: key.Fingerprint, GroupID: key.GroupID, GroupName: key.GroupName})
+		}
+	}
+	if len(result.UnavailableKeyIDs) > 0 && result.SyncStatus == "ready" {
+		result.SyncStatus = "partial"
+	}
 	return result, nil
+}
+
+func apiKeyHintHash(channelType storage.ChannelType, key string) string {
+	key = normalizeFingerprintAPIKey(channelType, key)
+	if key == "" {
+		return ""
+	}
+	digest := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(digest[:])
 }

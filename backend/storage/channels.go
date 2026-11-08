@@ -12,8 +12,13 @@ type Channels struct{ db *gorm.DB }
 
 func NewChannels(db *gorm.DB) *Channels { return &Channels{db: db} }
 
+func (r *Channels) APIKeySnapshots() *APIKeySnapshots { return NewAPIKeySnapshots(r.db) }
+
 func (r *Channels) Create(c *Channel) error { return r.db.Create(c).Error }
-func (r *Channels) Update(c *Channel) error { return r.db.Save(c).Error }
+func (r *Channels) Update(c *Channel) error {
+	// 后台同步独立维护这些状态，普通渠道编辑不能覆盖并发写入的同步结果。
+	return r.db.Omit("APIKeySnapshotSource", "APIKeySyncedAt", "APIKeySyncAttemptedAt", "APIKeySyncComplete", "APIKeySyncError").Save(c).Error
+}
 func (r *Channels) Delete(id uint) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
 		var channel Channel
@@ -25,6 +30,7 @@ func (r *Channels) Delete(id uint) error {
 		}
 		for _, model := range []any{
 			&RateSnapshot{},
+			&ChannelAPIKeySnapshot{},
 			&RateChangeLog{},
 			&BalanceSnapshot{},
 			&CostSnapshot{},

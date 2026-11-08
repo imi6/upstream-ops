@@ -103,6 +103,7 @@ func main() {
 	channelSvc := channel.NewService(channels, authSessions, captchas, rates, monLogs, cipher)
 	channelSvc.UpdateProxyConfig(cfg.Proxy)
 	channelSvc.UpdateUpstreamConfig(cfg.Upstream)
+	channelSvc.UpdateExternalAPIConfig(cfg.ExternalAPI)
 	dispatcher := notify.NewDispatcher(notifies, cipher, log, notify.Policy{
 		NotificationPrefix:                       cfg.App.NotificationPrefix,
 		MinChangePct:                             cfg.Notifications.MinChangePct,

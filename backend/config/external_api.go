@@ -15,6 +15,18 @@ type ExternalAPIConfig struct {
 	OnlyCreatedKeyGroups bool   `mapstructure:"onlyCreatedKeyGroups" yaml:"onlyCreatedKeyGroups" json:"onlyCreatedKeyGroups"`
 }
 
+func (c ExternalAPIConfig) AllowsChannel(id uint) bool {
+	if len(c.ChannelIDs) == 0 {
+		return true
+	}
+	for _, allowed := range c.ChannelIDs {
+		if allowed == id {
+			return true
+		}
+	}
+	return false
+}
+
 func (c ExternalAPIConfig) Validate() error {
 	token := strings.TrimSpace(c.Token)
 	if c.Enabled && len(token) < 32 {

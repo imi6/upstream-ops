@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/bejix/upstream-ops/backend/channel"
@@ -44,6 +45,10 @@ type externalChannelRates struct {
 	KeyFingerprintAlgorithm     string              `json:"key_fingerprint_algorithm"`
 	KeyFingerprintNormalization string              `json:"key_fingerprint_normalization"`
 	KeyFingerprintsComplete     bool                `json:"key_fingerprints_complete"`
+	KeySyncedAt                 *time.Time          `json:"key_synced_at"`
+	KeySyncAttemptedAt          *time.Time          `json:"key_sync_attempted_at"`
+	KeySyncStatus               string              `json:"key_sync_status"`
+	KeySyncError                string              `json:"key_sync_error,omitempty"`
 	UnavailableAPIKeyIDs        []int64             `json:"unavailable_api_key_ids"`
 	Groups                      []externalGroupRate `json:"groups"`
 }
@@ -58,6 +63,7 @@ type externalRateFilter struct {
 	GroupName    string
 	GroupID      int64
 	OnlyWithKeys bool
+	ForceRefresh bool
 }
 
 func registerExternalAPI(r *gin.Engine, d *Deps) {
@@ -117,7 +123,7 @@ func externalRateFilterFromQuery(c *gin.Context, cfg config.ExternalAPIConfig) (
 		externalAPIFail(c, http.StatusBadRequest, "unsupported_parameter", "本接口不接收上游 API Key，请在 NewAPI 本地匹配下发的指纹")
 		return filter, false
 	}
-	for _, name := range []string{"group_name", "group_id", "only_with_keys"} {
+	for _, name := range []string{"group_name", "group_id", "only_with_keys", "force_refresh"} {
 		if values, present := query[name]; present && (len(values) != 1 || strings.TrimSpace(values[0]) == "") {
 			externalAPIFail(c, http.StatusBadRequest, "invalid_filter", name+" 必须提供唯一的非空值")
 			return filter, false
@@ -140,19 +146,19 @@ func externalRateFilterFromQuery(c *gin.Context, cfg config.ExternalAPIConfig) (
 		}
 		filter.OnlyWithKeys = filter.OnlyWithKeys || force
 	}
+	if raw, present := c.GetQuery("force_refresh"); present {
+		force, err := strconv.ParseBool(raw)
+		if err != nil {
+			externalAPIFail(c, http.StatusBadRequest, "invalid_filter", "force_refresh 必须是布尔值或 0/1")
+			return filter, false
+		}
+		filter.ForceRefresh = force
+	}
 	return filter, true
 }
 
 func externalChannelAllowed(cfg config.ExternalAPIConfig, id uint) bool {
-	if len(cfg.ChannelIDs) == 0 {
-		return true
-	}
-	for _, allowedID := range cfg.ChannelIDs {
-		if allowedID == id {
-			return true
-		}
-	}
-	return false
+	return cfg.AllowsChannel(id)
 }
 
 func externalGroupRates(c *gin.Context, d *Deps) {
@@ -185,10 +191,18 @@ func externalGroupRates(c *gin.Context, d *Deps) {
 		}
 		return
 	}
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 30*time.Second)
+	timeout := 15 * time.Second
+	if filter.ForceRefresh {
+		timeout = 90 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
 	data, err := buildExternalChannelRates(ctx, d, ch, filter)
 	if err != nil {
+		if filter.ForceRefresh {
+			externalAPIFail(c, http.StatusBadGateway, "refresh_failed", "强制刷新失败，已保留本地已有快照；可移除 force_refresh 参数读取")
+			return
+		}
 		externalAPIFail(c, http.StatusBadGateway, "channel_data_unavailable", "读取渠道倍率或 Key 指纹失败，请稍后重试")
 		return
 	}
@@ -203,6 +217,17 @@ func buildExternalChannelRates(ctx context.Context, d *Deps, ch *storage.Channel
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	// 只有显式强制刷新才访问上游；普通请求包括缺少快照时都只读取数据库。
+	if filter.ForceRefresh {
+		if d.Monitor == nil {
+			return nil, errors.New("倍率刷新服务不可用")
+		}
+		rateErr := d.Monitor.RefreshRates(ctx, ch)
+		keyErr := d.ChannelSvc.SyncAPIKeySnapshots(ctx, ch.ID, true)
+		if rateErr != nil || keyErr != nil {
+			return nil, errors.New("强制刷新上游数据失败")
+		}
+	}
 	snapshots, err := d.Rates.ListByChannel(ch.ID)
 	if err != nil {
 		return nil, err
@@ -215,19 +240,9 @@ func buildExternalChannelRates(ctx context.Context, d *Deps, ch *storage.Channel
 		OnlyWithKeys:                filter.OnlyWithKeys,
 		KeyFingerprintAlgorithm:     "sha256",
 		KeyFingerprintNormalization: channel.APIKeyFingerprintNormalization(ch.Type),
-		KeyFingerprintsComplete:     true,
+		KeyFingerprintsComplete:     false,
 		UnavailableAPIKeyIDs:        []int64{},
 		Groups:                      make([]externalGroupRate, 0, len(snapshots)),
-	}
-	if len(snapshots) == 0 {
-		return data, nil
-	}
-	var keyGroups *channel.APIKeyGroupSet
-	if filter.OnlyWithKeys {
-		keyGroups, err = d.ChannelSvc.ListAPIKeyGroupSet(ctx, ch.ID)
-		if err != nil {
-			return nil, err
-		}
 	}
 	fingerprints, err := d.ChannelSvc.ExportAPIKeyFingerprints(ctx, ch.ID)
 	if err != nil {
@@ -236,10 +251,17 @@ func buildExternalChannelRates(ctx context.Context, d *Deps, ch *storage.Channel
 	if fingerprints == nil {
 		return nil, errors.New("密钥指纹数据不可用")
 	}
+	if fingerprints.ChannelSource != storage.APIKeySnapshotSource(ch) {
+		return nil, errors.New("渠道账号已变更，请重新读取")
+	}
 	data.UnavailableAPIKeyIDs = fingerprints.UnavailableKeyIDs
-	data.KeyFingerprintsComplete = len(fingerprints.UnavailableKeyIDs) == 0
+	data.KeyFingerprintsComplete = fingerprints.SyncStatus == "ready" && len(fingerprints.UnavailableKeyIDs) == 0
+	data.KeySyncedAt = fingerprints.SyncedAt
+	data.KeySyncAttemptedAt = fingerprints.AttemptedAt
+	data.KeySyncStatus = fingerprints.SyncStatus
+	data.KeySyncError = fingerprints.SyncError
 	for _, snap := range snapshots {
-		if filter.OnlyWithKeys && !keyGroups.ContainsSnapshot(snap) {
+		if filter.OnlyWithKeys && !fingerprints.Groups.ContainsSnapshot(snap) {
 			continue
 		}
 		if filter.GroupName != "" && snap.ModelName != filter.GroupName {
@@ -300,20 +322,71 @@ func externalAllChannelRates(c *gin.Context, d *Deps) {
 	channelErrors := make([]externalChannelError, 0)
 	complete := true
 	found := make(map[uint]struct{}, len(list))
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 60*time.Second)
+	timeout := 30 * time.Second
+	if filter.ForceRefresh {
+		timeout = 120 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), timeout)
 	defer cancel()
-	for _, ch := range list {
+	results := make([]*externalChannelRates, len(list))
+	resultErrors := make([]error, len(list))
+	indexes := make([]int, 0, len(list))
+	for i, ch := range list {
 		found[ch.ID] = struct{}{}
-		if !externalChannelAllowed(cfg, ch.ID) {
-			continue
+		if externalChannelAllowed(cfg, ch.ID) {
+			indexes = append(indexes, i)
 		}
-		channelCtx, channelCancel := context.WithTimeout(ctx, 15*time.Second)
-		data, err := buildExternalChannelRates(channelCtx, d, &ch, filter)
-		channelCancel()
+	}
+	load := func(i int) {
+		defer func() {
+			if recover() != nil {
+				resultErrors[i] = errors.New("渠道数据读取异常")
+				if d.Log != nil {
+					d.Log.Error("external API channel refresh panic", "channel_id", list[i].ID)
+				}
+			}
+		}()
+		channelTimeout := 10 * time.Second
+		if filter.ForceRefresh {
+			channelTimeout = 45 * time.Second
+		}
+		channelCtx, channelCancel := context.WithTimeout(ctx, channelTimeout)
+		defer channelCancel()
+		results[i], resultErrors[i] = buildExternalChannelRates(channelCtx, d, &list[i], filter)
+	}
+	if filter.ForceRefresh {
+		// 批量强刷限制为最多四个渠道并发，避免一次请求瞬间打满全部上游。
+		jobs := make(chan int, len(indexes))
+		for _, i := range indexes {
+			jobs <- i
+		}
+		close(jobs)
+		var wg sync.WaitGroup
+		for worker := 0; worker < 4 && worker < len(indexes); worker++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for i := range jobs {
+					load(i)
+				}
+			}()
+		}
+		wg.Wait()
+	} else {
+		for _, i := range indexes {
+			load(i)
+		}
+	}
+	for _, i := range indexes {
+		data, err := results[i], resultErrors[i]
 		if err != nil {
 			complete = false
+			code, message := "channel_data_unavailable", "该渠道本地倍率或密钥快照暂不可用"
+			if filter.ForceRefresh {
+				code, message = "refresh_failed", "该渠道强制刷新失败，本地已有快照仍保留"
+			}
 			channelErrors = append(channelErrors, externalChannelError{
-				ChannelID: ch.ID, Code: "channel_data_unavailable", Message: "该渠道倍率或 Key 指纹暂不可用",
+				ChannelID: list[i].ID, Code: code, Message: message,
 			})
 			continue
 		}
