@@ -297,8 +297,8 @@ func (s *Service) RefreshBalance(ctx context.Context, c *storage.Channel) error 
 				"today_cost": costRes.TodayCost, "total_cost": nil,
 				"total_cost_unavailable": true, "warning": warning,
 			})
+		// 部分成功仅保留同步提示和日志，避免每轮同步重复发送失败告警。
 		s.log.Warn("累计消费不可用，今日消费已更新", "channel", c.Name, "reason", warning)
-		s.notifyError(ctx, c, storage.EventMonitorFailed, "累计消费未更新（今日已更新）", errors.New(warning))
 	} else {
 		progress.OK(ctx, progress.StageCost, fmt.Sprintf("今日 %0.4f / 累计 %0.4f", costRes.TodayCost, costRes.TotalCost),
 			map[string]any{"today_cost": costRes.TodayCost, "total_cost": costRes.TotalCost})
