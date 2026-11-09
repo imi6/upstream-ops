@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"errors"
 	"time"
 
@@ -70,6 +71,17 @@ func (r *Channels) List() ([]Channel, error) {
 	return list, nil
 }
 
+// ListForRankings 一次读取两榜共用的本地采集结果，不加载登录凭据或管理配置。
+// 仅供排行榜聚合使用，部分字段未加载的 Channel 不能用于 Save / Update。
+func (r *Channels) ListForRankings(ctx context.Context) ([]Channel, error) {
+	var list []Channel
+	err := r.db.WithContext(ctx).Select(
+		"id", "name", "type", "tags", "monitor_enabled", "balance_threshold", "last_error",
+		"last_balance", "last_balance_at", "today_cost", "today_cost_at",
+	).Order("id ASC").Find(&list).Error
+	return list, err
+}
+
 // ListPage 按 filter 搜索、筛选、排序后分页，pageSize 为 -1 时返回全部。
 // total 是筛选后的总数；filter 含未知取值时返回错误（见 ChannelListFilter.Normalize）。
 //
@@ -124,8 +136,10 @@ func (r *Channels) UpdateBalance(id uint, balance float64, at any, lastErr strin
 }
 
 // UpdateCosts 写入最近一次消费采集结果；at 为采集时间，用于"今日消费"跨天判断。
+// 并发采集可能乱序返回，旧采样不能覆盖已写入的新日期或新时刻。
 func (r *Channels) UpdateCosts(id uint, todayCost float64, totalCost float64, at time.Time) error {
-	return r.db.Model(&Channel{}).Where("id = ?", id).Updates(map[string]any{
+	return r.db.Model(&Channel{}).Where("id = ?", id).
+		Where("(today_cost_at IS NULL OR today_cost_at <= ?)", at).Updates(map[string]any{
 		"today_cost":    todayCost,
 		"today_cost_at": at,
 		"total_cost":    totalCost,

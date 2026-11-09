@@ -211,19 +211,25 @@ func (c *Client) GetBalance(ctx context.Context, ch *connector.Channel, session 
 
 func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) (*connector.CostResult, error) {
 	site := strings.TrimRight(ch.SiteURL, "/")
+	sampledAt := time.Now()
 	today, total, err := c.dashboardCosts(ctx, site, session)
 	if err != nil {
 		// 部分站点改造后下线了 dashboard/stats，改用 /usage/stats 传日期区间兜底。
 		var fallbackErr error
-		today, total, fallbackErr = c.usageStatsCosts(ctx, site, session)
+		sampledAt = time.Now()
+		today, total, fallbackErr = c.usageStatsCosts(ctx, site, session, sampledAt)
 		if fallbackErr != nil {
 			return nil, fmt.Errorf("sub2api dashboard stats: %w; fallback usage stats: %v", err, fallbackErr)
 		}
+	} else if !connector.CostDayStart(sampledAt).Equal(connector.CostDayStart(time.Now())) {
+		// 仪表盘只返回“今日”而不返回所属日期，跨午夜时无法确认数据属于哪一天。
+		return nil, errors.New("sub2api 今日消费查询跨越北京时间零点，请稍后重新同步")
 	}
 	multiplier := c.rechargeMultiplier(ctx, ch, session)
 	return &connector.CostResult{
 		TodayCost: connector.ApplyRechargeMultiplier(today, multiplier, ch.RechargeMultiplierMode),
 		TotalCost: connector.ApplyRechargeMultiplier(total, multiplier, ch.RechargeMultiplierMode),
+		SampledAt: sampledAt,
 	}, nil
 }
 
@@ -242,9 +248,8 @@ func (c *Client) dashboardCosts(ctx context.Context, site string, session *conne
 	return stats.TodayActualCost, stats.TotalActualCost, nil
 }
 
-func (c *Client) usageStatsCosts(ctx context.Context, site string, session *connector.AuthSession) (float64, float64, error) {
-	now := time.Now()
-	today := now.Format("2006-01-02")
+func (c *Client) usageStatsCosts(ctx context.Context, site string, session *connector.AuthSession, sampledAt time.Time) (float64, float64, error) {
+	today := connector.CostDayStart(sampledAt).Format("2006-01-02")
 	// 查询区间为闭区间（start_date == end_date 表示当天），累计用足够早的起始日期覆盖全部数据。
 	todayCost, err := c.usageStatsActualCost(ctx, site, session, url.Values{
 		"start_date": {today},

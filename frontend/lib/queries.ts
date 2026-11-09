@@ -14,6 +14,8 @@ import type {
   ChannelPage,
   CostTrendPoint,
   DashboardSummary,
+  DashboardRankings,
+  ChannelType,
   NotificationChannel,
   NotificationLogPage,
   RateChangeLogPage,
@@ -147,6 +149,28 @@ function useApi<T>(path: string | null, watchRefresh = true): QueryState<T> {
 
 export function useDashboardSummary() {
   return useApi<DashboardSummary>("/dashboard/summary")
+}
+
+export interface DashboardRankingFilter {
+  q?: string
+  type?: ChannelType
+  tag?: string
+  include_paused?: boolean
+  limit?: "10" | "20" | "all"
+  balance_order?: "asc" | "desc"
+}
+
+/** 两个榜单使用同一份本地快照，复用全局只读轮询。 */
+export function useDashboardRankings(filter: DashboardRankingFilter = {}) {
+  const qs = new URLSearchParams()
+  qs.set("limit", filter.limit ?? "10")
+  qs.set("include_paused", String(filter.include_paused ?? true))
+  qs.set("balance_order", filter.balance_order ?? "desc")
+  for (const key of ["q", "type", "tag"] as const) {
+    const value = filter[key]?.trim()
+    if (value) qs.set(key, value)
+  }
+  return useApi<DashboardRankings>(`/dashboard/rankings?${qs.toString()}`)
 }
 
 /** 本地自然日起止（RFC3339），用于网关用量「今日」统计 */

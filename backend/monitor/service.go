@@ -257,13 +257,18 @@ func (s *Service) RefreshBalance(ctx context.Context, c *storage.Channel) error 
 		map[string]any{"balance": res.Balance})
 
 	progress.Start(ctx, progress.StageCost, "拉取消费…")
+	costStartedAt := time.Now()
 	costRes, err := conn.GetCosts(ctx, resolved, session)
 	if err != nil {
 		progress.Fail(ctx, progress.StageCost, err.Error())
 		s.notifyError(ctx, c, storage.EventMonitorFailed, "消费采集失败", err)
 		return err
 	}
-	costAt := time.Now()
+	// 采集所属日期跟随连接器的查询区间，不能把跨午夜返回的昨日金额标成今天。
+	costAt := costRes.SampledAt
+	if costAt.IsZero() {
+		costAt = costStartedAt
+	}
 	if err := s.channels.UpdateCosts(c.ID, costRes.TodayCost, costRes.TotalCost, costAt); err != nil {
 		progress.Fail(ctx, progress.StageCost, err.Error())
 		return err
@@ -271,7 +276,7 @@ func (s *Service) RefreshBalance(ctx context.Context, c *storage.Channel) error 
 	_ = s.rates.AppendCost(&storage.CostSnapshot{
 		ChannelID: c.ID,
 		TodayCost: costRes.TodayCost,
-		SampledAt: sampledAt,
+		SampledAt: costAt,
 	})
 	progress.OK(ctx, progress.StageCost, fmt.Sprintf("今日 %0.4f / 累计 %0.4f", costRes.TodayCost, costRes.TotalCost),
 		map[string]any{"today_cost": costRes.TodayCost, "total_cost": costRes.TotalCost})

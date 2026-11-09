@@ -10,6 +10,7 @@ import (
 // registerDashboard 提供首页所需聚合视图。
 func registerDashboard(g *gin.RouterGroup, d *Deps) {
 	g.GET("/dashboard/summary", func(c *gin.Context) { dashboardSummary(c, d) })
+	g.GET("/dashboard/rankings", func(c *gin.Context) { dashboardRankings(c, d) })
 	g.GET("/dashboard/balance-trend", func(c *gin.Context) { dashboardBalanceTrend(c, d) })
 	g.GET("/dashboard/cost-trend", func(c *gin.Context) { dashboardCostTrend(c, d) })
 }

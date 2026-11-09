@@ -230,6 +230,59 @@ export interface DashboardSummary {
   recent_rate_changes: RateChangeLog[]
 }
 
+/** 排行榜只读快照；金额已经完成渠道充值倍率换算。 */
+export interface DashboardRankingItem {
+  rank: number
+  channel_id: number
+  name: string
+  type: ChannelType
+  tags: string[]
+  monitor_enabled: boolean
+  amount: number
+  share: number | null
+  sampled_at: string | null
+  is_previous_day: boolean
+  low_balance: boolean
+  last_error?: string
+}
+
+export type RankingCostStatus = "ready" | "missing" | "unknown_time" | "not_synced_today" | "invalid_time"
+
+export interface DashboardUnrankedChannel {
+  channel_id: number
+  name: string
+  type: ChannelType
+  tags: string[]
+  monitor_enabled: boolean
+  last_error?: string
+  cost_status: RankingCostStatus
+  balance_status: "ready" | "missing"
+  today_cost_at: string | null
+  last_balance_at: string | null
+}
+
+export interface DashboardRankings {
+  date: string
+  time_zone: string
+  generated_at: string
+  available_tags: string[]
+  summary: {
+    total_channels: number
+    filtered_channels: number
+    today_cost_total: number
+    balance_total: number
+    today_cost_channels: number
+    balance_channels: number
+    today_cost_pending_channels: number
+    balance_missing_channels: number
+    latest_cost_at: string | null
+    latest_balance_at: string | null
+  }
+  cost_ranking: DashboardRankingItem[]
+  balance_ranking: DashboardRankingItem[]
+  unranked_channels: DashboardUnrankedChannel[]
+}
+
 export interface BalanceTrendPoint {
   day: string
   balance: number

@@ -122,6 +122,8 @@ type BalanceResult struct {
 type CostResult struct {
 	TodayCost float64
 	TotalCost float64
+	// SampledAt 记录本次今日消费查询所属的日期，避免跨午夜返回时被当作新一天的数据。
+	SampledAt time.Time
 }
 
 // RateResult 一条倍率记录。ModelName 在两个上游分别是"分组名"，Description 是该分组的描述（来自上游接口）。

@@ -361,7 +361,7 @@ func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *c
 	}
 
 	now := time.Now()
-	start := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location()).Unix()
+	start := connector.CostDayStart(now).Unix()
 	end := now.Unix()
 	logBody, err := c.getJSON(ctx, site+"/api/log/self/stat?type=0&token_name=&model_name=&start_timestamp="+strconv.FormatInt(start, 10)+"&end_timestamp="+strconv.FormatInt(end, 10)+"&group=", session)
 	if err != nil {
@@ -391,6 +391,7 @@ func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *c
 	return &connector.CostResult{
 		TodayCost: connector.ApplyRechargeMultiplier(todayCost, multiplier, ch.RechargeMultiplierMode),
 		TotalCost: connector.ApplyRechargeMultiplier(totalCost, multiplier, ch.RechargeMultiplierMode),
+		SampledAt: now,
 	}, nil
 }
 

@@ -10,6 +10,7 @@ import {
   RefreshCw,
   Settings,
   Sun,
+  Trophy,
 } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import {
@@ -205,6 +206,10 @@ export function MonitorHeader() {
                 <Home className="size-4" />
                 主页
               </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => navigate("/rankings")}>
+                <Trophy className="size-4" />
+                渠道排行榜
+              </DropdownMenuItem>
               <DropdownMenuItem onSelect={() => navigate("/settings")}>
                 <Settings className="size-4" />
                 系统设置
@@ -242,6 +247,23 @@ export function MonitorHeader() {
               </TooltipTrigger>
               <TooltipContent side="bottom" className="text-xs">
                 {"主页"}
+              </TooltipContent>
+            </Tooltip>
+
+            <Tooltip delayDuration={200}>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => navigate("/rankings")}
+                  className="size-8 border-border bg-background text-foreground hover:bg-muted"
+                  aria-label="渠道排行榜"
+                >
+                  <Trophy className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="bottom" className="text-xs">
+                {"渠道排行榜"}
               </TooltipContent>
             </Tooltip>
 
