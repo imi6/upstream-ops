@@ -138,12 +138,24 @@ func (r *Channels) UpdateBalance(id uint, balance float64, at any, lastErr strin
 // UpdateCosts 写入最近一次消费采集结果；at 为采集时间，用于"今日消费"跨天判断。
 // 并发采集可能乱序返回，旧采样不能覆盖已写入的新日期或新时刻。
 func (r *Channels) UpdateCosts(id uint, todayCost float64, totalCost float64, at time.Time) error {
-	return r.db.Model(&Channel{}).Where("id = ?", id).
-		Where("(today_cost_at IS NULL OR today_cost_at <= ?)", at).Updates(map[string]any{
+	return r.updateCostValues(id, todayCost, &totalCost, at)
+}
+
+// UpdateTodayCost 只写入有效的今日消费，不读取或覆盖可能已被其他请求更新的累计值。
+func (r *Channels) UpdateTodayCost(id uint, todayCost float64, at time.Time) error {
+	return r.updateCostValues(id, todayCost, nil, at)
+}
+
+func (r *Channels) updateCostValues(id uint, todayCost float64, totalCost *float64, at time.Time) error {
+	values := map[string]any{
 		"today_cost":    todayCost,
 		"today_cost_at": at,
-		"total_cost":    totalCost,
-	}).Error
+	}
+	if totalCost != nil {
+		values["total_cost"] = *totalCost
+	}
+	return r.db.Model(&Channel{}).Where("id = ?", id).
+		Where("(today_cost_at IS NULL OR today_cost_at <= ?)", at).Updates(values).Error
 }
 func (r *Channels) SetLastError(id uint, msg string) error {
 	return r.db.Model(&Channel{}).Where("id = ?", id).Update("last_error", msg).Error

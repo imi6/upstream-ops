@@ -213,59 +213,74 @@ func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *c
 	site := strings.TrimRight(ch.SiteURL, "/")
 	sampledAt := time.Now()
 	today, total, err := c.dashboardCosts(ctx, site, session)
+	warning := ""
 	if err != nil {
-		// 部分站点改造后下线了 dashboard/stats，改用 /usage/stats 传日期区间兜底。
+		// 兜底只查询当天，避免累计区间超过上游限制，也不把近期消耗冒充历史累计。
 		var fallbackErr error
 		sampledAt = time.Now()
-		today, total, fallbackErr = c.usageStatsCosts(ctx, site, session, sampledAt)
+		today, fallbackErr = c.usageStatsCosts(ctx, site, session, sampledAt)
 		if fallbackErr != nil {
 			return nil, fmt.Errorf("sub2api dashboard stats: %w; fallback usage stats: %v", err, fallbackErr)
 		}
+		total = nil
+		warning = "今日消费已更新；累计消费未更新，保留原值：主统计接口不可用，兜底仅查询当天"
 	} else if !connector.CostDayStart(sampledAt).Equal(connector.CostDayStart(time.Now())) {
 		// 仪表盘只返回“今日”而不返回所属日期，跨午夜时无法确认数据属于哪一天。
 		return nil, errors.New("sub2api 今日消费查询跨越北京时间零点，请稍后重新同步")
 	}
 	multiplier := c.rechargeMultiplier(ctx, ch, session)
-	return &connector.CostResult{
+	result := &connector.CostResult{
 		TodayCost: connector.ApplyRechargeMultiplier(today, multiplier, ch.RechargeMultiplierMode),
-		TotalCost: connector.ApplyRechargeMultiplier(total, multiplier, ch.RechargeMultiplierMode),
 		SampledAt: sampledAt,
-	}, nil
+	}
+	if total != nil {
+		result.TotalCost = connector.ApplyRechargeMultiplier(*total, multiplier, ch.RechargeMultiplierMode)
+	} else {
+		result.TotalCostUnavailable = true
+		if warning == "" {
+			warning = "今日消费已更新；累计消费未更新，保留原值：上游未提供有效的 total_actual_cost"
+		}
+		result.Warning = warning
+	}
+	return result, nil
 }
 
-func (c *Client) dashboardCosts(ctx context.Context, site string, session *connector.AuthSession) (float64, float64, error) {
+func (c *Client) dashboardCosts(ctx context.Context, site string, session *connector.AuthSession) (float64, *float64, error) {
 	body, err := c.getJSON(ctx, site+"/api/v1/usage/dashboard/stats", session)
 	if err != nil {
-		return 0, 0, err
+		return 0, nil, err
 	}
 	var stats struct {
-		TodayActualCost float64 `json:"today_actual_cost"`
-		TotalActualCost float64 `json:"total_actual_cost"`
+		TodayActualCost *float64        `json:"today_actual_cost"`
+		TotalActualCost json.RawMessage `json:"total_actual_cost"`
 	}
 	if err := json.Unmarshal(body, &stats); err != nil {
-		return 0, 0, fmt.Errorf("decode: %w", err)
+		return 0, nil, fmt.Errorf("decode: %w", err)
 	}
-	return stats.TodayActualCost, stats.TotalActualCost, nil
+	if stats.TodayActualCost == nil {
+		return 0, nil, errors.New("响应缺少 today_actual_cost")
+	}
+	var total *float64
+	if len(stats.TotalActualCost) > 0 {
+		// 累计字段单独解析，缺失、null 或格式异常都不能丢掉有效的今日金额。
+		if err := json.Unmarshal(stats.TotalActualCost, &total); err != nil {
+			return *stats.TodayActualCost, nil, nil
+		}
+	}
+	return *stats.TodayActualCost, total, nil
 }
 
-func (c *Client) usageStatsCosts(ctx context.Context, site string, session *connector.AuthSession, sampledAt time.Time) (float64, float64, error) {
+func (c *Client) usageStatsCosts(ctx context.Context, site string, session *connector.AuthSession, sampledAt time.Time) (float64, error) {
 	today := connector.CostDayStart(sampledAt).Format("2006-01-02")
-	// 查询区间为闭区间（start_date == end_date 表示当天），累计用足够早的起始日期覆盖全部数据。
+	// 查询区间为闭区间（start_date == end_date 表示当天），此处返回值仅代表当天。
 	todayCost, err := c.usageStatsActualCost(ctx, site, session, url.Values{
 		"start_date": {today},
 		"end_date":   {today},
 	})
 	if err != nil {
-		return 0, 0, fmt.Errorf("today: %w", err)
+		return 0, fmt.Errorf("today: %w", err)
 	}
-	totalCost, err := c.usageStatsActualCost(ctx, site, session, url.Values{
-		"start_date": {"2000-01-01"},
-		"end_date":   {today},
-	})
-	if err != nil {
-		return 0, 0, fmt.Errorf("total: %w", err)
-	}
-	return todayCost, totalCost, nil
+	return todayCost, nil
 }
 
 func (c *Client) usageStatsActualCost(ctx context.Context, site string, session *connector.AuthSession, params url.Values) (float64, error) {
@@ -274,12 +289,15 @@ func (c *Client) usageStatsActualCost(ctx context.Context, site string, session 
 		return 0, err
 	}
 	var stats struct {
-		TotalActualCost float64 `json:"total_actual_cost"`
+		TotalActualCost *float64 `json:"total_actual_cost"`
 	}
 	if err := json.Unmarshal(body, &stats); err != nil {
 		return 0, fmt.Errorf("decode: %w", err)
 	}
-	return stats.TotalActualCost, nil
+	if stats.TotalActualCost == nil {
+		return 0, errors.New("响应缺少 total_actual_cost")
+	}
+	return *stats.TotalActualCost, nil
 }
 
 func (c *Client) rechargeMultiplier(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) *float64 {

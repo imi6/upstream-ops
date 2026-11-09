@@ -122,6 +122,11 @@ type BalanceResult struct {
 type CostResult struct {
 	TodayCost float64
 	TotalCost float64
+	// TotalCostUnavailable 表示本次仅今日消费有效，调用方必须保留已保存的累计值。
+	// 默认 false，兼容返回完整消费结果的连接器。
+	TotalCostUnavailable bool
+	// Warning 记录部分采集成功的原因，不应将其误报为今日消费采集失败。
+	Warning string
 	// SampledAt 记录本次今日消费查询所属的日期，避免跨午夜返回时被当作新一天的数据。
 	SampledAt time.Time
 }

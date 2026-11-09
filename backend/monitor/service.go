@@ -3,6 +3,7 @@ package monitor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -259,6 +260,9 @@ func (s *Service) RefreshBalance(ctx context.Context, c *storage.Channel) error 
 	progress.Start(ctx, progress.StageCost, "拉取消费…")
 	costStartedAt := time.Now()
 	costRes, err := conn.GetCosts(ctx, resolved, session)
+	if err == nil && costRes == nil {
+		err = errors.New("上游未返回有效消费结果")
+	}
 	if err != nil {
 		progress.Fail(ctx, progress.StageCost, err.Error())
 		s.notifyError(ctx, c, storage.EventMonitorFailed, "消费采集失败", err)
@@ -269,7 +273,12 @@ func (s *Service) RefreshBalance(ctx context.Context, c *storage.Channel) error 
 	if costAt.IsZero() {
 		costAt = costStartedAt
 	}
-	if err := s.channels.UpdateCosts(c.ID, costRes.TodayCost, costRes.TotalCost, costAt); err != nil {
+	if costRes.TotalCostUnavailable {
+		err = s.channels.UpdateTodayCost(c.ID, costRes.TodayCost, costAt)
+	} else {
+		err = s.channels.UpdateCosts(c.ID, costRes.TodayCost, costRes.TotalCost, costAt)
+	}
+	if err != nil {
 		progress.Fail(ctx, progress.StageCost, err.Error())
 		return err
 	}
@@ -278,8 +287,22 @@ func (s *Service) RefreshBalance(ctx context.Context, c *storage.Channel) error 
 		TodayCost: costRes.TodayCost,
 		SampledAt: costAt,
 	})
-	progress.OK(ctx, progress.StageCost, fmt.Sprintf("今日 %0.4f / 累计 %0.4f", costRes.TodayCost, costRes.TotalCost),
-		map[string]any{"today_cost": costRes.TodayCost, "total_cost": costRes.TotalCost})
+	if costRes.TotalCostUnavailable {
+		warning := strings.TrimSpace(costRes.Warning)
+		if warning == "" {
+			warning = "今日消费已更新；累计消费暂不可用，已保留原值"
+		}
+		progress.OK(ctx, progress.StageCost, fmt.Sprintf("今日 %0.4f；%s", costRes.TodayCost, warning),
+			map[string]any{
+				"today_cost": costRes.TodayCost, "total_cost": nil,
+				"total_cost_unavailable": true, "warning": warning,
+			})
+		s.log.Warn("累计消费不可用，今日消费已更新", "channel", c.Name, "reason", warning)
+		s.notifyError(ctx, c, storage.EventMonitorFailed, "累计消费未更新（今日已更新）", errors.New(warning))
+	} else {
+		progress.OK(ctx, progress.StageCost, fmt.Sprintf("今日 %0.4f / 累计 %0.4f", costRes.TodayCost, costRes.TotalCost),
+			map[string]any{"today_cost": costRes.TodayCost, "total_cost": costRes.TotalCost})
+	}
 
 	if c.BalanceThreshold > 0 && res.Balance < c.BalanceThreshold {
 		body := fmt.Sprintf("当前余额: %.4f，阈值: %.4f", res.Balance, c.BalanceThreshold)

@@ -368,31 +368,42 @@ func (c *Client) GetCosts(ctx context.Context, ch *connector.Channel, session *c
 		return nil, fmt.Errorf("newapi self stat: %w", err)
 	}
 	var todayStat struct {
-		Quota float64 `json:"quota"`
+		Quota *float64 `json:"quota"`
 	}
 	if err := json.Unmarshal(logBody, &todayStat); err != nil {
 		return nil, fmt.Errorf("newapi self stat decode: %w", err)
 	}
+	if todayStat.Quota == nil {
+		return nil, errors.New("newapi self stat: 响应缺少 quota")
+	}
+
+	multiplier := newAPIRechargeMultiplier(ch, status.Price)
+	result := &connector.CostResult{
+		TodayCost: connector.ApplyRechargeMultiplier(c.quotaToUSD(*todayStat.Quota, status.QuotaPerUnit), multiplier, ch.RechargeMultiplierMode),
+		SampledAt: now,
+	}
+	// 当天统计成功后，累计请求失败不得丢掉已取得的今日金额。
+	unavailableTotal := func(reason string) (*connector.CostResult, error) {
+		result.TotalCostUnavailable = true
+		result.Warning = "今日消费已更新；累计消费未更新，保留原值：" + reason
+		return result, nil
+	}
 
 	usageBody, err := c.getJSON(ctx, site+"/api/user/self", session)
 	if err != nil {
-		return nil, fmt.Errorf("newapi self total: %w", err)
+		return unavailableTotal("累计接口请求失败")
 	}
 	var usage struct {
-		UsedQuota float64 `json:"used_quota"`
+		UsedQuota *float64 `json:"used_quota"`
 	}
 	if err := json.Unmarshal(usageBody, &usage); err != nil {
-		return nil, fmt.Errorf("newapi self total decode: %w", err)
+		return unavailableTotal("累计接口响应格式异常")
 	}
-
-	todayCost := c.quotaToUSD(todayStat.Quota, status.QuotaPerUnit)
-	totalCost := c.quotaToUSD(usage.UsedQuota, status.QuotaPerUnit)
-	multiplier := newAPIRechargeMultiplier(ch, status.Price)
-	return &connector.CostResult{
-		TodayCost: connector.ApplyRechargeMultiplier(todayCost, multiplier, ch.RechargeMultiplierMode),
-		TotalCost: connector.ApplyRechargeMultiplier(totalCost, multiplier, ch.RechargeMultiplierMode),
-		SampledAt: now,
-	}, nil
+	if usage.UsedQuota == nil {
+		return unavailableTotal("上游未提供 used_quota")
+	}
+	result.TotalCost = connector.ApplyRechargeMultiplier(c.quotaToUSD(*usage.UsedQuota, status.QuotaPerUnit), multiplier, ch.RechargeMultiplierMode)
+	return result, nil
 }
 
 func (c *Client) GetRates(ctx context.Context, ch *connector.Channel, session *connector.AuthSession) ([]connector.RateResult, error) {
